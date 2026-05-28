@@ -1,0 +1,8 @@
+{
+  "port": 3847,
+  "listenHost": "127.0.0.1",
+  "healthTimeoutSeconds": 120,
+  "browserAppMode": true,
+  "browserMaximized": true,
+  "appTitle": "Portfolio Performance"
+}

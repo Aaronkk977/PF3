@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id             String        @id @default(cuid())
+  name           String
+  currency       String        @default("TWD")
+  cash           Decimal       @default(0)
+  feeRateBps     Float         @default(4)
+  taxRatePct     Float         @default(0.003)
+  feeRateBpsBuy  Float?
+  feeRateBpsSell Float?
+  taxRatePctBuy  Float?
+  taxRatePctSell Float?
+  /** 手續費與稅：無條件捨去，低消 1 元 */
+  feeTaxRoundHalfUp Boolean     @default(false)
+  transactions   Transaction[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt @default(now())
+}
+
+model Instrument {
+  id           String            @id @default(cuid())
+  symbol       String            @unique
+  name         String?
+  /** 使用者 Markdown 投資筆記 */
+  notes        String?
+  assetClass   String            @default("stock")
+  currency     String?
+  feeRateBps   Int?
+  taxRatePct   Float?
+  transactions Transaction[]
+  tags         TagOnInstrument[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt @default(now())
+}
+
+model Watchlist {
+  id        String          @id @default(cuid())
+  name      String          @unique
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
+  items     WatchlistItem[]
+}
+
+model WatchlistItem {
+  id          String    @id @default(cuid())
+  watchlistId String
+  symbol      String
+  name        String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistId, symbol])
+  @@index([watchlistId])
+}
+
+model Tag {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  instruments TagOnInstrument[]
+}
+
+model TagOnInstrument {
+  instrumentId String
+  tagId        String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  tag          Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([instrumentId, tagId])
+}
+
+model Transaction {
+  id           String      @id @default(cuid())
+  accountId    String
+  instrumentId String?
+  type         String
+  date         DateTime
+  quantity     Decimal
+  price        Decimal
+  fee          Decimal     @default(0)
+  tax          Decimal     @default(0)
+  note         String?
+  account      Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  instrument   Instrument? @relation(fields: [instrumentId], references: [id], onDelete: SetNull)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt @default(now())
+
+  @@index([accountId])
+  @@index([instrumentId])
+  @@index([date])
+}
+
+model FxRateCache {
+  id       String   @id @default(cuid())
+  pair     String   @unique
+  rate     Float
+  cachedAt DateTime @default(now())
+}
+
+model PerformanceSnapshot {
+  id              String   @id @default(cuid())
+  cacheKey        String   @unique
+  periodStart     String
+  periodEnd       String
+  benchmarkSymbol String
+  dataFingerprint String
+  payload         String
+  computedAt      DateTime @default(now())
+}
+
+model PortfolioValueSnapshot {
+  id          String   @id @default(cuid())
+  cacheKey    String   @unique
+  periodStart String
+  periodEnd   String
+  txCount     Int
+  maxTxDate   String
+  payload     String
+  computedAt  DateTime @default(now())
+}
+
+model Benchmark {
+  id     String @id @default(cuid())
+  symbol String @unique
+  label  String
+}
+
+model PriceCache {
+  id        String   @id @default(cuid())
+  symbol    String
+  date      DateTime
+  open      Float?
+  high      Float?
+  low       Float?
+  close     Float
+  volume    Float?
+  cachedAt  DateTime @default(now())
+
+  @@unique([symbol, date])
+  @@index([symbol])
+}

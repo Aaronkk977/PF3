@@ -1,0 +1,115 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta http-equiv="x-ua-compatible" content="IE=edge" />
+<HTA:APPLICATION
+  ID="PPSplash"
+  APPLICATIONNAME="Portfolio Performance"
+  BORDER="none"
+  CAPTION="no"
+  SHOWINTASKBAR="yes"
+  SINGLEINSTANCE="yes"
+  SYSMENU="no"
+  SCROLL="no"
+  INNERBORDER="no"
+/>
+<title>Portfolio Performance</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0e17;
+    color: #00f0ff;
+    font-family: "Microsoft JhengHei UI", "PMingLiU", "Segoe UI", sans-serif;
+  }
+  .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    font-size: 14px;
+    line-height: 1.7;
+    padding: 16px;
+    box-sizing: border-box;
+  }
+</style>
+<script type="text/javascript">
+var pollTimer;
+
+function appDataDir() {
+  var sh = new ActiveXObject("WScript.Shell");
+  return sh.ExpandEnvironmentStrings("%APPDATA%") + "\\PortfolioPerformance";
+}
+function offFile() { return appDataDir() + "\\splash.off"; }
+function errFile() { return appDataDir() + "\\splash.error"; }
+
+function readUtf8File(path) {
+  var stream = new ActiveXObject("ADODB.Stream");
+  stream.Type = 2;
+  stream.Charset = "utf-8";
+  stream.Open();
+  stream.LoadFromFile(path);
+  var text = stream.ReadText();
+  stream.Close();
+  return text;
+}
+
+function centerWindow() {
+  var w = 460, h = 140;
+  window.resizeTo(w, h);
+  window.moveTo(
+    Math.round((screen.availWidth - w) / 2),
+    Math.round((screen.availHeight - h) / 2)
+  );
+}
+
+function localizeError(msg) {
+  if (msg.indexOf("Production build missing") >= 0) {
+    return "尚未建置正式版。請在專案目錄執行 npm run build:app 後再雙擊 launch.bat。";
+  }
+  if (msg.indexOf("Node.js not found") >= 0 || msg.indexOf("Node not found") >= 0) {
+    return "找不到 Node.js。請安裝 https://nodejs.org 後登出再登入，然後雙擊 launch.bat。";
+  }
+  if (msg.indexOf("Server exited") >= 0 || msg.indexOf("did not respond") >= 0) {
+    return "伺服器啟動失敗。請重新執行 npm run build:app。";
+  }
+  return msg;
+}
+
+function poll() {
+  var fso = new ActiveXObject("Scripting.FileSystemObject");
+  if (fso.FileExists(errFile())) {
+    window.clearInterval(pollTimer);
+    var msg = localizeError(readUtf8File(errFile()));
+    try { fso.DeleteFile(errFile()); } catch (e) {}
+    alert(msg);
+    window.close();
+    return;
+  }
+  if (fso.FileExists(offFile())) {
+    window.clearInterval(pollTimer);
+    try { fso.DeleteFile(offFile()); } catch (e) {}
+    window.close();
+  }
+}
+
+function init() {
+  centerWindow();
+  var fso = new ActiveXObject("Scripting.FileSystemObject");
+  var dir = appDataDir();
+  if (!fso.FolderExists(dir)) fso.CreateFolder(dir);
+  try { if (fso.FileExists(offFile())) fso.DeleteFile(offFile()); } catch (e) {}
+  try { if (fso.FileExists(errFile())) fso.DeleteFile(errFile()); } catch (e) {}
+  pollTimer = window.setInterval(poll, 150);
+}
+</script>
+</head>
+<body onload="init()">
+  <div class="wrap">
+    <div>正在啟動 Portfolio Performance<br />請稍候…</div>
+  </div>
+</body>
+</html>

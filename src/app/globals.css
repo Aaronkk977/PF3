@@ -1,0 +1,449 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #0a0e17;
+  --color-foreground: #e8f4ff;
+  --color-card: #111827;
+  --color-card-border: #1e3a5f;
+  --color-primary: #00f0ff;
+  --color-accent: #ff00aa;
+  --color-muted: #6b8aab;
+  --color-positive: #00ff88;
+  --color-negative: #ff4466;
+  --font-family-sans: var(--font-sans);
+  --font-family-mono: var(--font-mono);
+}
+
+html {
+  font-family: var(--font-sans);
+  --font-sans:
+    var(--font-noto-sans-tc), "Microsoft JhengHei UI", "Microsoft JhengHei",
+    "PingFang TC", "Helvetica Neue", Arial, sans-serif;
+  /* 等寬拉丁字 + 正黑體中文；勿用 monospace 以免 Windows 回退新細明體 */
+  --font-mono:
+    "Cascadia Code", "JetBrains Mono", Consolas, var(--font-noto-sans-tc),
+    "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+}
+
+/* Cyberpunk（預設） */
+html[data-theme="cyberpunk"],
+html:not([data-theme]) {
+  --color-background: #0a0e17;
+  --color-foreground: #e8f4ff;
+  --color-card: #111827;
+  --color-card-border: #1e3a5f;
+  --color-primary: #00f0ff;
+  --color-accent: #ff00aa;
+  --color-muted: #6b8aab;
+  --grid-opacity: 0.03;
+  --glow-strength: 1;
+}
+
+/* 黑白簡約（米色底、深字高對比） */
+html[data-theme="monochrome"] {
+  --color-background: #f3ede4;
+  --color-foreground: #1c1917;
+  --color-card: #faf6ef;
+  --color-card-border: #d4cdc2;
+  --color-primary: #1c1917;
+  --color-accent: #57534e;
+  /* 表單標籤用中性灰，避免 Cyberpunk 藍灰殘留 */
+  --color-muted: #6b6560;
+  --color-label: #44403c;
+  --grid-opacity: 0.05;
+  --glow-strength: 0;
+}
+
+/* 黑白反色（黑底淺字） */
+html[data-theme="noir"] {
+  --color-background: #0a0a0a;
+  --color-foreground: #f5f5f5;
+  --color-card: #141414;
+  --color-card-border: #404040;
+  --color-primary: #f5f5f5;
+  --color-accent: #a3a3a3;
+  --color-muted: #a3a3a3;
+  --grid-opacity: 0.08;
+  --glow-strength: 0;
+}
+
+/* 漲跌配色：綠漲紅跌（預設） */
+html[data-color-mode="green-up"],
+html:not([data-color-mode]) {
+  --color-positive: #00ff88;
+  --color-negative: #ff4466;
+}
+
+html[data-theme="monochrome"][data-color-mode="green-up"],
+html[data-theme="monochrome"]:not([data-color-mode]),
+html[data-theme="noir"][data-color-mode="green-up"],
+html[data-theme="noir"]:not([data-color-mode]) {
+  --color-positive: #15803d;
+  --color-negative: #b91c1c;
+}
+
+/* 漲跌配色：紅漲綠跌（台股） */
+html[data-color-mode="red-up"] {
+  --color-positive: #ff4466;
+  --color-negative: #00ff88;
+}
+
+html[data-theme="monochrome"][data-color-mode="red-up"],
+html[data-theme="noir"][data-color-mode="red-up"] {
+  --color-positive: #b91c1c;
+  --color-negative: #15803d;
+}
+
+/* 設定頁：各選項卡片內的漲跌示範 */
+[data-color-mode="green-up"] {
+  --color-positive: #00ff88;
+  --color-negative: #ff4466;
+}
+
+[data-color-mode="red-up"] {
+  --color-positive: #ff4466;
+  --color-negative: #00ff88;
+}
+
+html[data-theme="monochrome"] [data-color-mode="green-up"],
+html[data-theme="noir"] [data-color-mode="green-up"] {
+  --color-positive: #15803d;
+  --color-negative: #b91c1c;
+}
+
+html[data-theme="monochrome"] [data-color-mode="red-up"],
+html[data-theme="noir"] [data-color-mode="red-up"] {
+  --color-positive: #b91c1c;
+  --color-negative: #15803d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* 全站正黑體；禁止回退新細明體 / 細明體 */
+body,
+button,
+input,
+select,
+textarea,
+label,
+option,
+summary {
+  font-family: var(--font-sans);
+}
+
+/* 日期欄位內建編輯區（Windows / Chromium） */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+  font-family: var(--font-sans);
+}
+
+input[type="date"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field {
+  font-family: var(--font-sans);
+}
+
+/* 表單：標籤與輸入文字跟隨主題，黑白主題勿顯示藍色 */
+html {
+  --color-label: var(--color-muted);
+}
+
+label,
+.form-label {
+  color: var(--color-label);
+}
+
+html[data-theme="monochrome"] input,
+html[data-theme="monochrome"] select,
+html[data-theme="monochrome"] textarea {
+  color: var(--color-foreground);
+}
+
+html[data-theme="monochrome"] select option {
+  color: var(--color-foreground);
+  background: var(--color-card);
+}
+
+html[data-theme="monochrome"] .text-foreground {
+  color: var(--color-foreground);
+}
+
+/* 等寬樣式：拉丁用 mono，中文用堆疊內的正黑體／Noto */
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.recharts-wrapper,
+.recharts-wrapper text,
+.recharts-wrapper tspan,
+.recharts-surface text,
+.recharts-surface tspan,
+.recharts-legend-item-text,
+.recharts-tooltip-wrapper,
+.recharts-default-tooltip {
+  font-family: var(--font-sans) !important;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(128, 128, 128, var(--grid-opacity)) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(128, 128, 128, var(--grid-opacity)) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+html[data-theme="cyberpunk"] body::before,
+html:not([data-theme]) body::before {
+  background-image:
+    linear-gradient(rgba(0, 240, 255, var(--grid-opacity)) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, var(--grid-opacity)) 1px, transparent 1px);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.glow-border {
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent);
+  box-shadow: 0 0 calc(20px * var(--glow-strength))
+    color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.glow-text {
+  text-shadow: 0 0 calc(12px * var(--glow-strength))
+    color-mix(in srgb, var(--color-primary) 50%, transparent);
+}
+
+.clock-display {
+  font-family: var(--font-clock), ui-sans-serif, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.positive {
+  color: var(--color-positive);
+}
+
+.negative {
+  color: var(--color-negative);
+}
+
+/* 買賣方向（買=漲色、賣=跌色，隨漲跌配色設定切換） */
+.trade-buy {
+  color: var(--color-positive);
+}
+
+.trade-sell {
+  color: var(--color-negative);
+}
+
+.trade-buy-field {
+  border-color: color-mix(in srgb, var(--color-positive) 45%, var(--color-card-border));
+  background: color-mix(in srgb, var(--color-positive) 8%, var(--color-background));
+}
+
+.trade-sell-field {
+  border-color: color-mix(in srgb, var(--color-negative) 45%, var(--color-card-border));
+  background: color-mix(in srgb, var(--color-negative) 8%, var(--color-background));
+}
+
+/* 台股漲停：環繞外圈發光（追蹤清單／持倉卡片） */
+@property --tw-limit-up-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.tw-limit-up {
+  position: relative;
+  z-index: 0;
+  overflow: visible;
+  border-color: color-mix(in srgb, var(--color-positive) 45%, var(--color-card-border));
+  background: color-mix(in srgb, var(--color-positive) 6%, var(--color-card-border)/10);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-positive) 35%, transparent),
+    0 0 16px 0 color-mix(in srgb, var(--color-positive) 28%, transparent),
+    0 0 32px 0 color-mix(in srgb, var(--color-positive) 14%, transparent);
+  animation: tw-limit-up-halo 2.4s ease-in-out infinite;
+}
+
+.tw-limit-up::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -2;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--tw-limit-up-angle),
+    transparent 0deg,
+    color-mix(in srgb, var(--color-positive) 95%, white) 55deg,
+    color-mix(in srgb, var(--color-positive) 70%, transparent) 110deg,
+    transparent 160deg,
+    color-mix(in srgb, var(--color-positive) 90%, white) 215deg,
+    color-mix(in srgb, var(--color-positive) 65%, transparent) 280deg,
+    transparent 360deg
+  );
+  filter: blur(5px);
+  opacity: 0.92;
+  animation: tw-limit-up-orbit 2.8s linear infinite;
+}
+
+.tw-limit-up::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border-radius: calc(0.5rem - 1px);
+  background: color-mix(in srgb, var(--color-card-border) 10%, var(--color-background));
+}
+
+@keyframes tw-limit-up-orbit {
+  to {
+    --tw-limit-up-angle: 360deg;
+  }
+}
+
+@keyframes tw-limit-up-halo {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-positive) 30%, transparent),
+      0 0 12px 0 color-mix(in srgb, var(--color-positive) 22%, transparent),
+      0 0 24px 0 color-mix(in srgb, var(--color-positive) 10%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-positive) 55%, transparent),
+      0 0 20px 2px color-mix(in srgb, var(--color-positive) 42%, transparent),
+      0 0 44px 4px color-mix(in srgb, var(--color-positive) 22%, transparent);
+  }
+}
+
+/* Markdown 筆記預覽 */
+.markdown-body {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--color-foreground);
+  word-break: break-word;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.25em 0 0.5em;
+  color: var(--color-foreground);
+}
+
+.markdown-body h1 {
+  font-size: 1.35rem;
+}
+
+.markdown-body h2 {
+  font-size: 1.15rem;
+}
+
+.markdown-body h3 {
+  font-size: 1rem;
+}
+
+.markdown-body p {
+  margin: 0.65em 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.35em;
+}
+
+.markdown-body li {
+  margin: 0.25em 0;
+}
+
+.markdown-body a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body blockquote {
+  margin: 0.75em 0;
+  padding-left: 0.85em;
+  border-left: 3px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  color: var(--color-muted);
+}
+
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.12em 0.35em;
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--color-foreground) 8%, var(--color-card));
+}
+
+.markdown-body pre {
+  margin: 0.75em 0;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-card-border);
+  background: color-mix(in srgb, var(--color-background) 70%, var(--color-card));
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-body table {
+  width: 100%;
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--color-card-border);
+  padding: 0.35em 0.55em;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-card));
+}
+
+.markdown-body hr {
+  margin: 1em 0;
+  border: none;
+  border-top: 1px solid var(--color-card-border);
+}
