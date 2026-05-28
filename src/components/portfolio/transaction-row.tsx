@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { instrumentHref } from "@/lib/instrument-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,7 @@ import {
   formatCurrency,
   formatDate,
   formatFeeTaxAmount,
+  formatTransactionAmount,
 } from "@/lib/utils";
 
 const CASH_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
@@ -43,17 +44,22 @@ export function TransactionRow({
   tx,
   accounts,
   columnOrder,
+  isEditing,
+  onStartEdit,
+  onCancelEdit,
   onSaved,
   onDeleted,
 }: {
   tx: EditableTransaction;
   accounts: AccountOption[];
   columnOrder: TxColumnId[];
+  isEditing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
   onSaved: () => void;
   onDeleted: () => void;
 }) {
   const pathname = usePathname();
-  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     accountId: tx.accountId,
@@ -66,6 +72,20 @@ export function TransactionRow({
     tax: String(tx.tax),
     note: tx.note ?? "",
   });
+  useEffect(() => {
+    if (!isEditing) return;
+    setForm({
+      accountId: tx.accountId,
+      type: tx.type,
+      date: tx.date.slice(0, 10),
+      symbol: tx.symbol ?? "",
+      quantity: String(tx.quantity),
+      price: String(tx.price),
+      fee: String(tx.fee),
+      tax: String(tx.tax),
+      note: tx.note ?? "",
+    });
+  }, [isEditing, tx]);
 
   const account = accounts.find((a) => a.id === tx.accountId);
   const currency = account?.currency ?? "TWD";
@@ -115,7 +135,7 @@ export function TransactionRow({
         alert(err.error ?? "儲存失敗");
         return;
       }
-      setEditing(false);
+      onCancelEdit();
       onSaved();
     } finally {
       setSaving(false);
@@ -140,7 +160,10 @@ export function TransactionRow({
     }
   }
 
-  if (editing) {
+  const isTaiwanStockTx =
+    !isCashTx && !!tx.symbol && /\.(TW|TWO)$/i.test(tx.symbol.trim());
+
+  if (isEditing) {
     return (
       <tr className="border-b border-[var(--color-card-border)]/60 bg-[var(--color-primary)]/5">
         <td colSpan={columnOrder.length} className="py-4">
@@ -267,7 +290,7 @@ export function TransactionRow({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => setEditing(false)}
+              onClick={onCancelEdit}
               disabled={saving}
             >
               取消
@@ -351,7 +374,9 @@ export function TransactionRow({
       case "price":
         return (
           <td key={col} className={numericClass}>
-            {formatCurrency(tx.price, currency)}
+            {isTaiwanStockTx
+              ? formatTransactionAmount(tx.price)
+              : formatCurrency(tx.price, currency)}
           </td>
         );
       case "fee":
@@ -383,7 +408,11 @@ export function TransactionRow({
             )}
           >
             {settlement
-              ? `${settlement.isOutflow ? "−" : "+"}${formatCurrency(Math.abs(settlement.net), currency)}`
+              ? `${settlement.isOutflow ? "−" : "+"}${
+                  isTaiwanStockTx
+                    ? formatTransactionAmount(Math.abs(settlement.net))
+                    : formatCurrency(Math.abs(settlement.net), currency)
+                }`
               : "—"}
           </td>
         );
@@ -398,7 +427,7 @@ export function TransactionRow({
                 type="button"
                 variant="ghost"
                 className="h-8 shrink-0 px-2 text-xs"
-                onClick={() => setEditing(true)}
+                onClick={onStartEdit}
               >
                 編輯
               </Button>

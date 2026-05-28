@@ -4,7 +4,7 @@ import {
   formatTransactionType,
   transactionTypeClass,
 } from "@/lib/transaction-type-display";
-import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { cn, formatCurrency, formatDate, formatTransactionAmount } from "@/lib/utils";
 
 export type InstrumentTransactionRow = {
   id: string;
@@ -55,6 +55,7 @@ export function InstrumentTransactionsTable({
           {transactions.map((tx) => {
             const isCash = CASH_TYPES.has(tx.type);
             const ccy = tx.currency ?? currency;
+            const useRawAmount = ccy === "TWD";
             return (
               <tr
                 key={tx.id}
@@ -78,7 +79,9 @@ export function InstrumentTransactionsTable({
                   {isCash ? "—" : tx.quantity.toLocaleString("zh-TW")}
                 </td>
                 <td className="py-3 pr-4 text-right tabular-nums text-[var(--color-foreground)]">
-                  {formatCurrency(tx.price, ccy)}
+                  {useRawAmount
+                    ? formatTransactionAmount(tx.price)
+                    : formatCurrency(tx.price, ccy)}
                 </td>
                 <td className="py-3 pr-4 text-right tabular-nums text-[var(--color-muted)]">
                   {isCash ? "—" : formatCurrency(tx.fee, ccy)}

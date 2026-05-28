@@ -32,6 +32,7 @@ export function TransactionsTable({
 }) {
   const [dragCol, setDragCol] = useState<TxColumnId | null>(null);
   const [dropTarget, setDropTarget] = useState<TxColumnId | null>(null);
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
 
   const handleDrop = useCallback(
     (target: TxColumnId) => {
@@ -114,6 +115,9 @@ export function TransactionsTable({
                 tx={t}
                 accounts={accounts}
                 columnOrder={columnOrder}
+                isEditing={editingTxId === t.id}
+                onStartEdit={() => setEditingTxId(t.id)}
+                onCancelEdit={() => setEditingTxId(null)}
                 onSaved={onSaved}
                 onDeleted={onDeleted}
               />

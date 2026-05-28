@@ -115,6 +115,10 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
   const q = query.trim();
   if (!q) return [];
 
+  const upperQ = q.toUpperCase();
+  const shouldSuggestTaiwanVix =
+    upperQ.includes("VIX") || upperQ.includes("TWN");
+
   const [local, remote] = await Promise.all([
     searchLocalInstruments(q),
     searchYahooInstruments(q).catch(() => [] as SearchResult[]),
@@ -122,6 +126,15 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
 
   const seen = new Set<string>();
   const merged: SearchResult[] = [];
+  if (shouldSuggestTaiwanVix) {
+    merged.push({
+      symbol: "VIXTWN",
+      name: "TAIWAN VIX",
+      exchange: "TAIFEX",
+      type: "INDEX",
+    });
+    seen.add("VIXTWN");
+  }
   for (const item of [...local, ...remote]) {
     const key = item.symbol.toUpperCase();
     if (seen.has(key)) continue;

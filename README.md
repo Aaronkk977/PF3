@@ -1,18 +1,19 @@
 # Portfolio Performance
 
-Cyberpunk-styled portfolio tracker MVP built with Next.js, Prisma (SQLite), and Yahoo Finance.
+A personal portfolio tracker for Taiwan stocks, US stocks, ETFs, and crypto.  
+Built with Next.js + Prisma (SQLite), focused on fast local usage and clear performance analysis.
 
-## Features
+## What This App Does
 
-- Dashboard with portfolio summary and allocation charts
-- Holdings with tags and links to candlestick charts
-- Transaction ledger with CSV import
-- Performance analysis with benchmark comparison (simplified)
-- Instrument detail pages with K-line charts and tag editing
+- Track holdings, watchlist symbols, and cash positions across accounts.
+- Record transactions (BUY/SELL/DIVIDEND/DEPOSIT/WITHDRAWAL).
+- Import transactions from CSV.
+- View portfolio performance with charts and benchmark comparison.
+- Open instrument detail pages (price trend, trades, notes).
 
-## Setup
+## Quick Start (Windows)
 
-Open a **new** PowerShell or Command Prompt (so `npm` is on PATH), then:
+Open PowerShell in project root, then run:
 
 ```powershell
 cd "c:\Users\User\Desktop\Porfolio Performance"
@@ -22,92 +23,37 @@ npm run db:seed
 npm run dev
 ```
 
-If PowerShell says `npm` is not recognized, either **restart Cursor** or run:
+Then open [http://localhost:3000](http://localhost:3000).
+
+If `npm` is not recognized, run:
 
 ```powershell
 .\dev.ps1
 ```
 
-Or refresh PATH in the current window:
+## Run Like an App (No Terminal Window)
 
-```powershell
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
-## 正式版啟動（純啟動器，無雙終端）
-
-建置一次：
+Build once:
 
 ```powershell
 npm run build:app
 ```
 
-之後雙擊 **`launch.bat`**（或 `launcher\start.ps1`）：
+Then double-click `launch.bat` (or run `launcher\start.ps1`):
 
-- 背景啟動 `next` 正式伺服器（無 CMD 視窗）
-- 自動開啟瀏覽器（App 模式）
-- 資料庫與匯入目錄：`%AppData%\PortfolioPerformance\`
+- Starts production server in background
+- Opens browser in app-like mode
+- Uses `%AppData%\PortfolioPerformance\` for runtime data
 
-停止背景伺服器：
+Stop background server:
 
 ```powershell
 .\launcher\stop.ps1
 ```
 
-| 檔案 | 用途 |
-|------|------|
-| `launch.bat` | 正式版，給使用者 |
-| `run.bat` | 開發模式（`npm run dev` + 可見終端機） |
+## CSV Import
 
-## Troubleshooting
-
-### `next/font` / `lightningcss` / `rm: cannot remove node_modules` (WSL)
-
-**Cause:** Running `npm` in **WSL** on a Windows folder (`/mnt/c/...`) while `node_modules` was built for Windows. Native `.node` / `.dll` files get locked and WSL `rm` fails with `Input/output error`.
-
-**Recommended:** Use **Windows PowerShell** only (same project folder):
-
-```powershell
-cd "c:\Users\User\Desktop\Porfolio Performance"
-npm run dev
-```
-
-**If you must reinstall dependencies:**
-
-1. Stop all dev servers (`Ctrl+C`) and close extra terminals.
-2. In **PowerShell** (not WSL):
-
-```powershell
-Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
-cd "c:\Users\User\Desktop\Porfolio Performance"
-npx rimraf node_modules .next
-npm install
-npm run dev
-```
-
-Do **not** use `rm -rf node_modules` from WSL on `/mnt/c/` paths — it often cannot delete `.prisma` or `@next/swc` Windows binaries.
-
-**If you insist on WSL:** copy the project to the Linux filesystem (e.g. `~/portfolio`), then `npm install` and `npm run dev` there — not on `/mnt/c/`.
-
-## 匯入資料位置
-
-| 檔案 | 說明 |
-|------|------|
-| `data/import/legacy/All_transactions.csv` | 舊軟體原始匯出（保留備份） |
-| `data/import/transactions.csv` | 轉換後的標準格式（程式可直接匯入） |
-
-從根目錄 `All_transactions.csv` 轉換並複製到上述路徑：
-
-```powershell
-npm run import:convert
-npm run import:legacy
-npm run accounts:ensure
-```
-
-## CSV 標準格式
+Supported CSV columns:
 
 ```csv
 date,symbol,type,quantity,price,fee,tax,account,note
@@ -115,11 +61,46 @@ date,symbol,type,quantity,price,fee,tax,account,note
 2025-02-01,,DEPOSIT,1,50000,0,0,美股（Firstrade）,
 ```
 
-亦支援直接上傳舊版 `All_transactions.csv`（Transactions 頁面匯入）。
+Legacy file conversion commands:
 
-## Symbol Conventions (Yahoo Finance)
+```powershell
+npm run import:convert
+npm run import:legacy
+npm run accounts:ensure
+```
+
+## Symbol Rules
 
 - Taiwan stocks: `2330.TW`, `0050.TW`
 - US stocks: `AAPL`, `MSFT`
 - Crypto: `BTC-USD`
 - Indices: `^GSPC`
+- Taiwan VIX alias in app watchlist: `VIXTWN`
+
+## Privacy & Git Safety
+
+Personal data files should **not** be committed to GitHub.
+
+- Keep local secrets only in `.env` (never upload real keys).
+- Keep imported personal CSV files under `data/import/`.
+- Database and generated files are local-only.
+
+Recommended before pushing:
+
+```powershell
+git status
+git ls-files ".env" "data/**" "prisma/dev.db*"
+```
+
+If sensitive files are tracked, untrack them first:
+
+```powershell
+git rm --cached .env
+git rm --cached data/import/legacy/All_transactions.csv
+git rm --cached data/import/transactions.csv
+```
+
+## Troubleshooting (WSL)
+
+Use Windows PowerShell for this workspace path.  
+Running `npm` in WSL on `/mnt/c/...` may lock native binaries and break install/remove steps.

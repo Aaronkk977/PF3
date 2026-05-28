@@ -29,6 +29,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files
+.env
 .env*.local
 
 # vercel
@@ -41,3 +42,8 @@ next-env.d.ts
 # prisma
 /prisma/dev.db
 /prisma/dev.db-journal
+
+# private data
+/data/import/legacy
+/data/import/transactions.csv
+/data/import/sample-import.csv
