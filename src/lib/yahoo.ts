@@ -4,6 +4,7 @@ import YahooFinance from "yahoo-finance2";
 import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import { isTaiwanMarketClosed } from "@/lib/market-session";
+import { fetchWithShortTimeout } from "@/lib/http-fetch";
 import {
   isCryptoSymbol,
   isTaiwanStockSymbol,
@@ -34,19 +35,7 @@ async function fetchWithTimeout(
   url: string,
   init?: RequestInit & { next?: { revalidate?: number } },
 ): Promise<Response | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), YAHOO_FETCH_TIMEOUT_MS);
-  try {
-    return await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0", ...init?.headers },
-    });
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchWithShortTimeout(url, init, YAHOO_FETCH_TIMEOUT_MS);
 }
 
 async function yahooQuote(symbol: string) {

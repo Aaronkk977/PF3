@@ -8,6 +8,7 @@ Built with Next.js + Prisma (SQLite), focused on fast local usage and clear perf
 - Track holdings, watchlist symbols, and cash positions across accounts.
 - Record transactions (BUY/SELL/DIVIDEND/DEPOSIT/WITHDRAWAL).
 - Import transactions from CSV.
+- Review trades: period fees/taxes (monthly/quarterly/yearly) and per-sell realized P&L.
 - View portfolio performance with charts and benchmark comparison.
 - Open instrument detail pages (price trend, trades, notes).
 
@@ -99,8 +100,3 @@ git rm --cached .env
 git rm --cached data/import/legacy/All_transactions.csv
 git rm --cached data/import/transactions.csv
 ```
-
-## Troubleshooting (WSL)
-
-Use Windows PowerShell for this workspace path.  
-Running `npm` in WSL on `/mnt/c/...` may lock native binaries and break install/remove steps.

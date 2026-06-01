@@ -1,5 +1,6 @@
 import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
+import { fetchWithShortTimeout } from "@/lib/http-fetch";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -51,24 +52,18 @@ async function writeCachedRate(
 }
 
 /** Yahoo：{from}{to}=X 的 regularMarketPrice = 每 1 from 可換多少 to */
+const exchangeRateInFlight = new Map<string, Promise<number | null>>();
+
 async function fetchYahooCrossRate(
   from: string,
   to: string,
 ): Promise<number | null> {
-  const FETCH_TIMEOUT_MS = 6_000;
-
   const tryPair = async (base: string, quote: string) => {
     const symbol = `${base}${quote}=X`;
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const res = await fetchWithShortTimeout(url, { next: { revalidate: 3600 } });
+    if (!res?.ok) return null;
     try {
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        next: { revalidate: 3600 },
-        signal: controller.signal,
-      });
-      if (!res.ok) return null;
       const data = await res.json();
       const price =
         data?.chart?.result?.[0]?.meta?.regularMarketPrice ??
@@ -76,8 +71,6 @@ async function fetchYahooCrossRate(
       return typeof price === "number" && price > 0 ? price : null;
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   };
 
@@ -104,25 +97,38 @@ export async function getExchangeRate(
   const cached = await readCachedRate(f, t);
   if (cached) return cached;
 
-  let rate = await fetchYahooCrossRate(f, t);
+  const inFlightKey = `${f}_${t}`;
+  const pending = exchangeRateInFlight.get(inFlightKey);
+  if (pending) return pending;
 
-  if (rate == null && f !== "USD" && t !== "USD") {
-    const toUsd = await getExchangeRate(f, "USD");
-    const usdToTarget = await getExchangeRate("USD", t);
-    if (toUsd != null && usdToTarget != null) {
-      rate = toUsd * usdToTarget;
+  const work = (async () => {
+    let rate = await fetchYahooCrossRate(f, t);
+
+    if (rate == null && f !== "USD" && t !== "USD") {
+      const toUsd = await getExchangeRate(f, "USD");
+      const usdToTarget = await getExchangeRate("USD", t);
+      if (toUsd != null && usdToTarget != null) {
+        rate = toUsd * usdToTarget;
+      }
     }
-  }
 
-  if (rate != null && rate > 0) {
-    await writeCachedRate(f, t, rate);
-    return rate;
-  }
+    if (rate != null && rate > 0) {
+      await writeCachedRate(f, t, rate);
+      return rate;
+    }
 
-  const stale = await prisma.fxRateCache.findUnique({
-    where: { pair: cachePairKey(f, t) },
-  });
-  return stale?.rate ?? null;
+    const stale = await prisma.fxRateCache.findUnique({
+      where: { pair: cachePairKey(f, t) },
+    });
+    return stale?.rate ?? null;
+  })();
+
+  exchangeRateInFlight.set(inFlightKey, work);
+  try {
+    return await work;
+  } finally {
+    exchangeRateInFlight.delete(inFlightKey);
+  }
 }
 
 /** 從 Yahoo 日線取最接近指定日期的收盤匯率 */
@@ -140,15 +146,9 @@ async function fetchYahooHistoricalRate(
 
   for (const symbol of pairs) {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&period1=${periodStartSec}&period2=${periodEndSec}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8_000);
+    const res = await fetchWithShortTimeout(url, { next: { revalidate: 3600 } }, 6_000);
+    if (!res?.ok) continue;
     try {
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        next: { revalidate: 3600 },
-        signal: controller.signal,
-      });
-      if (!res.ok) continue;
       const data = await res.json();
       const result = data?.chart?.result?.[0];
       const timestamps: number[] = result?.timestamp ?? [];
@@ -179,8 +179,6 @@ async function fetchYahooHistoricalRate(
       if (bestRate != null && bestRate > 0) return bestRate;
     } catch {
       continue;
-    } finally {
-      clearTimeout(timer);
     }
   }
   return null;
@@ -198,6 +196,26 @@ export async function getExchangeRateOnDate(
   const f = normalizeCurrencyCode(from);
   const t = normalizeCurrencyCode(to);
   if (f === t) return 1;
+
+  const stale = await prisma.fxRateCache.findUnique({
+    where: { pair: cachePairKey(f, t) },
+  });
+  if (stale?.rate && stale.rate > 0) {
+    // 先備用快取，避免歷史 API 連線逾時時整頁卡住
+    const targetKey = toLocalDateKey(date);
+    const period1 = Math.floor(date.getTime() / 1000) - 21 * 86400;
+    const period2 = Math.floor(date.getTime() / 1000) + 86400;
+
+    const historical = await fetchYahooHistoricalRate(
+      f,
+      t,
+      targetKey,
+      period1,
+      period2,
+    );
+    if (historical != null && historical > 0) return historical;
+    return stale.rate;
+  }
 
   const targetKey = toLocalDateKey(date);
   const period1 = Math.floor(date.getTime() / 1000) - 21 * 86400;

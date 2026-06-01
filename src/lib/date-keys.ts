@@ -111,6 +111,18 @@ export function toLocalMonthKey(d: Date): string {
   return `${y}-${m}`;
 }
 
+/** ISO 週次 YYYY-Www（週一為週首） */
+export function toLocalWeekKey(d: Date): string {
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = date.getDay() || 7;
+  date.setDate(date.getDate() + 4 - day);
+  const yearStart = new Date(date.getFullYear(), 0, 1);
+  const weekNo = Math.ceil(
+    ((date.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7,
+  );
+  return `${date.getFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
 /** 抓歷史收盤價時往前多取的曆日數，供月初／假日前向填充 */
 export const PRICE_HISTORY_LOOKBACK_DAYS = 21;
 
