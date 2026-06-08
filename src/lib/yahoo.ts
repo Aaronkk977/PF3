@@ -311,6 +311,108 @@ async function fetchTaiwanVixDailyClose(dateKey: string): Promise<number | null>
   return parseLatestVixValue(text);
 }
 
+/** 取得 bq888 上所有可用的 VIXTWN 日期清單（YYYYMMDD 格式，降冪排列） */
+async function fetchTaiwanVixAvailableDates(): Promise<string[]> {
+  const listRes = await fetchWithTimeout(TAIWAN_VIX_LIST_URL, {
+    next: { revalidate: 3600 },
+  });
+  if (!listRes?.ok) return [];
+  const html = await listRes.text();
+  return Array.from(
+    new Set(
+      Array.from(html.matchAll(/getVixData\?filesname=(\d{8})/g)).map(
+        (m) => m[1]!,
+      ),
+    ),
+  );
+}
+
+/** 將 VIXTWN 日收盤值寫入 PriceCache（open=high=low=close=value） */
+async function persistVixClose(dateKey: string, value: number): Promise<void> {
+  const date = startOfDay(
+    new Date(
+      `${dateKey.slice(0, 4)}-${dateKey.slice(4, 6)}-${dateKey.slice(6, 8)}`,
+    ),
+  );
+  enqueuePriceCacheWrite(async () => {
+    await prisma.priceCache.upsert({
+      where: { symbol_date: { symbol: TAIWAN_VIX_SYMBOL, date } },
+      create: {
+        symbol: TAIWAN_VIX_SYMBOL,
+        date,
+        open: value,
+        high: value,
+        low: value,
+        close: value,
+      },
+      update: { open: value, high: value, low: value, close: value, cachedAt: new Date() },
+    });
+  });
+}
+
+/**
+ * 抓取 VIXTWN 歷史日收盤並寫入 PriceCache。
+ * 只抓 DB 中尚缺少的日期，並行數限制為 8。
+ */
+export async function syncVixHistory(
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<OhlcBar[]> {
+  const startKey = toLocalDateKey(periodStart).replace(/-/g, "");
+  const endKey = toLocalDateKey(periodEnd).replace(/-/g, "");
+
+  // 先從 DB 取已有的資料
+  const existing = await prisma.priceCache.findMany({
+    where: {
+      symbol: TAIWAN_VIX_SYMBOL,
+      date: { gte: startOfDay(periodStart), lte: startOfDay(periodEnd) },
+    },
+    orderBy: { date: "asc" },
+  });
+
+  const existingKeys = new Set(
+    existing.map((r) => toLocalDateKey(r.date).replace(/-/g, "")),
+  );
+
+  // 取 bq888 可用日期，篩出範圍內且 DB 缺少的
+  const allDates = await fetchTaiwanVixAvailableDates();
+  const missing = allDates.filter(
+    (d) => d >= startKey && d <= endKey && !existingKeys.has(d),
+  );
+
+  // 並行抓取（concurrency=8）
+  const CONCURRENCY = 8;
+  for (let i = 0; i < missing.length; i += CONCURRENCY) {
+    const batch = missing.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(async (dateKey) => {
+        const value = await fetchTaiwanVixDailyClose(dateKey);
+        if (value != null && value > 0) {
+          await persistVixClose(dateKey, value);
+        }
+      }),
+    );
+  }
+
+  // 重新從 DB 讀取（含剛寫入的）
+  const rows = await prisma.priceCache.findMany({
+    where: {
+      symbol: TAIWAN_VIX_SYMBOL,
+      date: { gte: startOfDay(periodStart), lte: startOfDay(periodEnd) },
+    },
+    orderBy: { date: "asc" },
+  });
+
+  return rows.map((r) => ({
+    date: toLocalDateKey(r.date),
+    open: r.open ?? r.close,
+    high: r.high ?? r.close,
+    low: r.low ?? r.close,
+    close: r.close,
+    volume: r.volume ?? undefined,
+  }));
+}
+
 async function fetchTaiwanVixQuote(): Promise<QuoteResult | null> {
   const liveRes = await fetchWithTimeout(TAIWAN_VIX_QUOTE_LIST_URL, {
     method: "POST",
@@ -346,13 +448,19 @@ async function fetchTaiwanVixQuote(): Promise<QuoteResult | null> {
           const ref = parseOptionalNumber(item.CRefPrice);
           const diffRaw = parseOptionalNumber(item.CDiff);
           const diffRateRaw = parseOptionalNumber(item.CDiffRate);
-          const change = Number.isFinite(diffRaw) ? diffRaw : undefined;
-          const changePercent = Number.isFinite(diffRateRaw)
-            ? diffRateRaw / 100
-            : Number.isFinite(ref) && ref > 0
-              ? (price - ref) / ref
+          const change =
+            diffRaw !== undefined && Number.isFinite(diffRaw)
+              ? diffRaw
               : undefined;
+          const changePercent =
+            diffRateRaw !== undefined && Number.isFinite(diffRateRaw)
+              ? diffRateRaw / 100
+              : ref !== undefined && Number.isFinite(ref) && ref > 0
+                ? (price - ref) / ref
+                : undefined;
 
+          const todayKey = toLocalDateKey(new Date()).replace(/-/g, "");
+          void persistVixClose(todayKey, price);
           return {
             symbol: TAIWAN_VIX_SYMBOL,
             name: item.DispEName ?? "TAIWAN VIX",
@@ -765,6 +873,10 @@ export async function getHistoricalPrices(
   periodStart: Date,
   periodEnd: Date,
 ): Promise<OhlcBar[]> {
+  if (isTaiwanVixSymbol(symbol)) {
+    return syncVixHistory(periodStart, periodEnd);
+  }
+
   const cached = await getCachedHistory(symbol, periodStart, periodEnd);
   const needsRefresh =
     cached.length === 0 ||

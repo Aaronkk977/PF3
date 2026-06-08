@@ -346,6 +346,7 @@ export function DashboardClient({
           currency={summary.baseCurrency}
           positive={changePositiveMoney(summary.todayChange)}
           subtitle={formatPercent(summary.todayChangePct)}
+          animated
         />
         <StatCard
           title="未實現損益"

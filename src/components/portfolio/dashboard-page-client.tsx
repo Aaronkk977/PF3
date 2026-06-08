@@ -9,7 +9,7 @@ import { useCachedPageData } from "@/hooks/use-cached-page-data";
 import type { HoldingPosition, PortfolioSummary } from "@/lib/portfolio-engine";
 import type { InstrumentSuggestion } from "@/lib/instrument-suggestions";
 import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
-import { prefetchSiblingPages } from "@/lib/prefetch-page-data";
+import { prefetchPerformanceWarm, prefetchSiblingPages } from "@/lib/prefetch-page-data";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
 
 type DashboardPayload = {
@@ -29,7 +29,10 @@ export function DashboardPageClient() {
     );
 
   useEffect(() => {
-    if (data) prefetchSiblingPages();
+    if (data) {
+      prefetchSiblingPages();
+      prefetchPerformanceWarm();
+    }
   }, [data]);
 
   useEffect(() => {

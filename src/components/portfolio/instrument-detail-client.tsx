@@ -9,6 +9,7 @@ import {
   type OhlcData,
   type TransactionMarker,
 } from "@/components/charts/candlestick-chart";
+import { SimpleLineChart } from "@/components/charts/simple-line-chart";
 import {
   InstrumentTransactionsTable,
   type InstrumentTransactionRow,
@@ -54,6 +55,7 @@ export function InstrumentDetailClient({
   transactions,
   transactionHistory,
   pnlSummary,
+  chartType = "candlestick",
 }: {
   instrument: Instrument;
   quote: QuoteResult | null;
@@ -67,6 +69,7 @@ export function InstrumentDetailClient({
   transactions: TransactionMarker[];
   transactionHistory: InstrumentTransactionRow[];
   pnlSummary: InstrumentPnlSummary;
+  chartType?: "candlestick" | "line";
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -389,13 +392,25 @@ export function InstrumentDetailClient({
         </PageSection>
       )}
 
-      <PageSection id="instrument-chart" title="K 線圖" className="mt-8" navOrder={30}>
+      <PageSection
+        id="instrument-chart"
+        title={chartType === "line" ? "折線圖" : "K 線圖"}
+        className="mt-8"
+        navOrder={30}
+      >
         <Card>
           <CardHeader>
-            <CardTitle>K 線圖（日線）</CardTitle>
+            <CardTitle>
+              {chartType === "line" ? "折線圖（日線）" : "K 線圖（日線）"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <CandlestickChart data={ohlc} transactions={transactions} />
+            {chartType === "line" ? (
+              <SimpleLineChart data={ohlc} />
+            ) : (
+              <CandlestickChart data={ohlc} transactions={transactions} />
+            )}
+            {chartType !== "line" && (
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-muted)]">
               <span className="trade-buy">▲ 買進</span>
               <span className="trade-sell">▼ 賣出</span>
@@ -428,6 +443,7 @@ export function InstrumentDetailClient({
                 年線 MA250
               </span>
             </div>
+            )}
           </CardContent>
         </Card>
       </PageSection>

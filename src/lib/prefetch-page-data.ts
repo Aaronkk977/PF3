@@ -57,6 +57,34 @@ export function prefetchSiblingPages(): void {
   });
 }
 
+let performanceWarmScheduled = false;
+
+/**
+ * Warm the server-side PerformanceSnapshot cache in the background.
+ * Does NOT store result in client cache — just ensures the server has computed
+ * and cached the result so navigating to /performance is instant.
+ */
+export function prefetchPerformanceWarm(): void {
+  if (typeof window === "undefined") return;
+  if (performanceWarmScheduled) return;
+  performanceWarmScheduled = true;
+
+  scheduleIdle(() => {
+    const end = new Date();
+    const start = new Date(
+      end.getFullYear() - 1,
+      end.getMonth(),
+      end.getDate(),
+    );
+    const startStr = start.toISOString().slice(0, 10);
+    const endStr = end.toISOString().slice(0, 10);
+    void fetch(
+      `/api/performance?start=${startStr}&end=${endStr}`,
+      { cache: "no-store" },
+    ).catch(() => {});
+  });
+}
+
 /** Warm a single tab cache (e.g. nav hover). */
 export function prefetchPage(cacheKey: string, url: string): void {
   if (typeof window === "undefined") return;

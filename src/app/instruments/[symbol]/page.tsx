@@ -128,6 +128,8 @@ export default async function InstrumentPage({
     instrumentCurrency,
   );
 
+  const isVix = symbol.toUpperCase() === "VIXTWN";
+
   return (
     <Suspense fallback={<div className="text-sm text-[var(--color-muted)]">載入中…</div>}>
     <InstrumentDetailClient
@@ -153,6 +155,7 @@ export default async function InstrumentPage({
       transactions={transactionMarkers}
       transactionHistory={transactionHistory}
       pnlSummary={pnlSummary}
+      chartType={isVix ? "line" : "candlestick"}
     />
     </Suspense>
   );
