@@ -3,6 +3,11 @@ import { prisma } from "@/lib/db";
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { inferInstrumentCurrency } from "@/lib/instrument-currency";
 import { inferAssetClass, getQuote, validateSymbol } from "@/lib/yahoo";
+import {
+  isTaiwanSymbol,
+  fetchTaiwanChineseName,
+  hasCjk,
+} from "@/lib/instrument-display-name";
 
 type InstrumentWithTags = Awaited<ReturnType<typeof findInstrument>>;
 
@@ -50,10 +55,18 @@ export async function ensureInstrument(
   if (existing) return existing;
 
   const hintName = hints?.name?.trim() || null;
+
+  const resolveTwName = async (raw: string | null | undefined): Promise<string | null> => {
+    if (!isTaiwanSymbol(symbol)) return raw ?? null;
+    if (raw && hasCjk(raw)) return raw;
+    const cn = await fetchTaiwanChineseName(symbol).catch(() => null);
+    return cn ?? raw ?? null;
+  };
+
   const validated = await validateSymbol(symbol);
   if (validated) {
     return createInstrumentOnce(symbol, {
-      name: hintName || validated.name || null,
+      name: await resolveTwName(hintName || validated.name),
       assetClass: inferAssetClass(symbol),
       currency:
         validated.currency ??
@@ -63,7 +76,7 @@ export async function ensureInstrument(
 
   const quote = await getQuote(symbol);
   return createInstrumentOnce(symbol, {
-    name: hintName || quote.name || null,
+    name: await resolveTwName(hintName || quote.name),
     assetClass: inferAssetClass(symbol),
     currency: inferInstrumentCurrency(symbol, null, quote.currency),
   });

@@ -254,6 +254,8 @@ export function TransactionsClient({
   const [filterAccountIds, setFilterAccountIds] = useState<string[]>([]);
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
+  // When true, filterDate always tracks "today" and auto-refreshes at midnight
+  const [todayMode, setTodayMode] = useState(false);
   const [filterSymbol, setFilterSymbol] = useState("");
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   const [columnOrder, setColumnOrder] = useState<TxColumnId[]>(
@@ -294,8 +296,16 @@ export function TransactionsClient({
       if (typeof prefs.listFiltersExpanded === "boolean") {
         setFiltersExpanded(prefs.listFiltersExpanded);
       }
-      if (prefs.listFilterDateFrom) setFilterDateFrom(prefs.listFilterDateFrom);
-      if (prefs.listFilterDateTo) setFilterDateTo(prefs.listFilterDateTo);
+      if (prefs.listFilterTodayMode) {
+        // "Today mode" — always snap to the current date, regardless of what
+        // date was saved (handles waking up the next day).
+        setTodayMode(true);
+        setFilterDateFrom(toLocalDateKey(new Date()));
+        setFilterDateTo(toLocalDateKey(new Date()));
+      } else {
+        if (prefs.listFilterDateFrom) setFilterDateFrom(prefs.listFilterDateFrom);
+        if (prefs.listFilterDateTo) setFilterDateTo(prefs.listFilterDateTo);
+      }
       if (prefs.listFilterSymbol) setFilterSymbol(prefs.listFilterSymbol);
       if (prefs.listColumnOrder) {
         setColumnOrder(normalizeTxColumnOrder(prefs.listColumnOrder));
@@ -314,6 +324,7 @@ export function TransactionsClient({
       listFilterAccountIds: filterAccountIds,
       listFilterDateFrom: filterDateFrom,
       listFilterDateTo: filterDateTo,
+      listFilterTodayMode: todayMode,
       listFilterSymbol: filterSymbol,
       listFiltersExpanded: filtersExpanded,
       listColumnOrder: columnOrder,
@@ -326,6 +337,7 @@ export function TransactionsClient({
     filterAccountIds,
     filterDateFrom,
     filterDateTo,
+    todayMode,
     filterSymbol,
     filtersExpanded,
     columnOrder,
@@ -1072,7 +1084,7 @@ export function TransactionsClient({
                   <Input
                     type="date"
                     value={filterDateFrom}
-                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                    onChange={(e) => { setTodayMode(false); setFilterDateFrom(e.target.value); }}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -1083,7 +1095,7 @@ export function TransactionsClient({
                   <Input
                     type="date"
                     value={filterDateTo}
-                    onChange={(e) => setFilterDateTo(e.target.value)}
+                    onChange={(e) => { setTodayMode(false); setFilterDateTo(e.target.value); }}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -1094,8 +1106,17 @@ export function TransactionsClient({
                     size="sm"
                     className="h-8 px-2.5 text-xs"
                     onClick={() => {
-                      setFilterDateFrom(todayKey);
-                      setFilterDateTo(todayKey);
+                      if (isTodayFilter) {
+                        // Toggle off — clear the date filter
+                        setTodayMode(false);
+                        setFilterDateFrom("");
+                        setFilterDateTo("");
+                      } else {
+                        // Toggle on — set to today and remember the mode
+                        setTodayMode(true);
+                        setFilterDateFrom(todayKey);
+                        setFilterDateTo(todayKey);
+                      }
                     }}
                   >
                     今日交易
@@ -1106,6 +1127,7 @@ export function TransactionsClient({
                     size="sm"
                     className="h-8 px-2.5 text-xs"
                     onClick={() => {
+                      setTodayMode(false);
                       setFilterDateFrom("");
                       setFilterDateTo("");
                     }}

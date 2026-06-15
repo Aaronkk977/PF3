@@ -20,13 +20,13 @@ export type PerformancePeriodPreset = {
 };
 
 export const DEFAULT_PERIOD_PRESETS: PerformancePeriodPreset[] = [
-  { id: "builtin-mtd", label: "MTD", unit: "mtd", builtin: true },
   { id: "builtin-1w", label: "1 週", unit: "weeks", amount: 1, builtin: true },
   { id: "builtin-1m", label: "1 月", unit: "months", amount: 1, builtin: true },
   { id: "builtin-3m", label: "3 月", unit: "months", amount: 3, builtin: true },
   { id: "builtin-6m", label: "6 月", unit: "months", amount: 6, builtin: true },
   { id: "builtin-1y", label: "1 年", unit: "years", amount: 1, builtin: true },
   { id: "builtin-ytd", label: "今年", unit: "ytd", builtin: true },
+  { id: "builtin-mtd", label: "MTD", unit: "mtd", builtin: true },
   { id: "builtin-all", label: "全部", unit: "all", builtin: true },
 ];
 

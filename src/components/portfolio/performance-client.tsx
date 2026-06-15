@@ -583,6 +583,7 @@ export function PerformanceClient({
       <PageSection id="performance-period" title="設定" className="mt-8" navOrder={10}>
         <CollapsibleCard
           title="設定"
+          variant="settings"
           expanded={settingsExpanded}
           onToggle={() => {
             setSettingsExpanded((v) => {
@@ -598,156 +599,185 @@ export function PerformanceClient({
             });
           }}
         >
-          <div className="space-y-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-muted)]">起始</label>
-              <Input
-                type="date"
-                value={start}
-                onChange={(e) => {
-                  setStart(e.target.value);
-                  setActivePeriodPresetId(null);
-                  persistPeriodPrefs({
-                    start: e.target.value,
-                    activePeriodPresetId: null,
-                  });
-                }}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-muted)]">結束</label>
-              <Input
-                type="date"
-                value={end}
-                onChange={(e) => {
-                  setEnd(e.target.value);
-                  setActivePeriodPresetId(null);
-                  persistPeriodPrefs({
-                    end: e.target.value,
-                    activePeriodPresetId: null,
-                  });
-                }}
-              />
-            </div>
-          </div>
+          <div className="space-y-5">
 
-          <PerformancePeriodPresets
-            start={start}
-            end={end}
-            activePresetId={activePeriodPresetId}
-            customPresets={customPeriodPresets}
-            portfolioEarliest={portfolioEarliest}
-            onApply={applyPeriodRange}
-            onCustomPresetsChange={handleCustomPresetsChange}
-          />
+            {/* ── 分析區間 ──────────────────────────────────────────── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-muted)]/70">
+                  分析區間
+                </span>
+                <div className="h-px flex-1 bg-[var(--color-card-border)]/40" />
+              </div>
+              <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+                <div className="flex items-end gap-4">
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--color-muted)]">起始</label>
+                    <Input
+                      type="date"
+                      value={start}
+                      onChange={(e) => {
+                        setStart(e.target.value);
+                        setActivePeriodPresetId(null);
+                        persistPeriodPrefs({
+                          start: e.target.value,
+                          activePeriodPresetId: null,
+                        });
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--color-muted)]">結束</label>
+                    <Input
+                      type="date"
+                      value={end}
+                      onChange={(e) => {
+                        setEnd(e.target.value);
+                        setActivePeriodPresetId(null);
+                        persistPeriodPrefs({
+                          end: e.target.value,
+                          activePeriodPresetId: null,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+                <PerformancePeriodPresets
+                  compact
+                  start={start}
+                  end={end}
+                  activePresetId={activePeriodPresetId}
+                  customPresets={customPeriodPresets}
+                  portfolioEarliest={portfolioEarliest}
+                  onApply={applyPeriodRange}
+                  onCustomPresetsChange={handleCustomPresetsChange}
+                />
+              </div>
+            </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--color-primary)]">
-                {grayscaleCharts ? "帳戶" : "帳戶"}
-              </p>
-              <p className="mb-2 text-[11px] text-[var(--color-muted)]">
-                Entire Portfolio 為全部現有帳戶合計；其餘勾選帳戶用於指標與市值拆解
-              </p>
-              <div className="flex flex-wrap gap-3">
+            {/* ── 帳戶 & 基準 ──────────────────────────────────────── */}
+            <div className="grid gap-5 md:grid-cols-2">
+
+              {/* 帳戶 */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-muted)]/70">
+                    帳戶
+                  </span>
+                  <div className="h-px flex-1 bg-[var(--color-card-border)]/40" />
+                </div>
+                <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
+                  Entire Portfolio 為全部帳戶合計，其餘帳戶用於指標拆解
+                </p>
                 {accounts.length === 0 ? (
                   <p className="text-xs text-[var(--color-muted)]">
                     尚無帳戶，請先執行 npm run accounts:ensure
                   </p>
                 ) : (
-                  <>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                    <input
-                      type="checkbox"
-                      checked={showEntirePortfolio}
-                      onChange={() => setShowEntirePortfolio((v) => !v)}
-                      className="rounded border-[var(--color-card-border)] accent-[var(--color-foreground)]"
-                    />
-                    <span
-                      className="inline-block h-2 w-2 rounded-full border border-[var(--color-foreground)]/40"
-                      style={{ background: "var(--color-foreground)" }}
-                    />
-                    {ENTIRE_PORTFOLIO_LABEL}
-                    <span className="text-xs font-normal text-[var(--color-muted)]">
-                      （全部帳戶合計）
-                    </span>
-                  </label>
-                  {accounts.map((acc, index) => (
-                    <label
-                      key={acc.id}
-                      className="flex cursor-pointer items-center gap-2 text-sm"
-                    >
+                  <div className="mt-1 flex flex-col gap-0.5">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-primary)]/5">
                       <input
                         type="checkbox"
-                        checked={selectedAccountIds.includes(acc.id)}
-                        onChange={() =>
-                          setSelectedAccountIds((prev) =>
-                            toggleInList(prev, acc.id),
-                          )
-                        }
-                        className="rounded border-[var(--color-card-border)] accent-[var(--color-primary)]"
+                        checked={showEntirePortfolio}
+                        onChange={() => setShowEntirePortfolio((v) => !v)}
+                        className="rounded border-[var(--color-card-border)] accent-[var(--color-foreground)]"
                       />
                       <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{
-                          background: resolveAccountSwatchColor(
-                            acc.name,
-                            index,
-                            chartTheme,
-                          ),
-                        }}
+                        className="inline-block h-2 w-2 rounded-full border border-[var(--color-foreground)]/40"
+                        style={{ background: "var(--color-foreground)" }}
                       />
-                      {acc.name}
-                      <span className="text-xs text-[var(--color-muted)]">
-                        ({acc.currency})
+                      {ENTIRE_PORTFOLIO_LABEL}
+                      <span className="ml-auto text-[11px] font-normal text-[var(--color-muted)]">
+                        全部帳戶
                       </span>
                     </label>
-                  ))}
-                  </>
+                    {accounts.map((acc, index) => (
+                      <label
+                        key={acc.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-[var(--color-primary)]/5"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAccountIds.includes(acc.id)}
+                          onChange={() =>
+                            setSelectedAccountIds((prev) =>
+                              toggleInList(prev, acc.id),
+                            )
+                          }
+                          className="rounded border-[var(--color-card-border)] accent-[var(--color-primary)]"
+                        />
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{
+                            background: resolveAccountSwatchColor(
+                              acc.name,
+                              index,
+                              chartTheme,
+                            ),
+                          }}
+                        />
+                        {acc.name}
+                        <span className="ml-auto text-[11px] text-[var(--color-muted)]">
+                          {acc.currency}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--color-accent)]">
-                基準
-              </p>
-              <BenchmarkSelector
-                benchmarks={benchmarkList}
-                selectedSymbols={selectedBenchmarks}
-                onSelectionChange={setSelectedBenchmarks}
-                onBenchmarksChange={setBenchmarkList}
-              />
-            </div>
-          </div>
 
-          <div className="flex flex-col gap-3 border-t border-[var(--color-card-border)]/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-[var(--color-muted)]">
-              變更日期、帳戶或基準後，請重新計算以更新圖表與指標
-            </p>
-            <Button
-              className="w-full shrink-0 sm:w-auto sm:min-w-[9rem]"
-              onClick={() => load({ force: true })}
-              disabled={loading || bgRefreshing}
-            >
-              {loading ? "計算中…" : "重新計算"}
-            </Button>
-          </div>
-
-          {loading && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-[var(--color-muted)]">
-                <span>{progressPhase ?? "計算中…"}</span>
-                <span className="tabular-nums">{Math.round(progress)}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-[var(--color-card-border)]">
-                <div
-                  className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
+              {/* 基準 */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-muted)]/70">
+                    基準
+                  </span>
+                  <div className="h-px flex-1 bg-[var(--color-card-border)]/40" />
+                </div>
+                <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
+                  勾選後顯示於累積報酬圖
+                </p>
+                <div className="mt-1">
+                  <BenchmarkSelector
+                    benchmarks={benchmarkList}
+                    selectedSymbols={selectedBenchmarks}
+                    onSelectionChange={setSelectedBenchmarks}
+                    onBenchmarksChange={setBenchmarkList}
+                  />
+                </div>
               </div>
             </div>
-          )}
+
+            {/* ── 執行 ──────────────────────────────────────────────── */}
+            <div className="space-y-3 border-t border-[var(--color-card-border)]/50 pt-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-[var(--color-muted)]">
+                  變更日期、帳戶或基準後，請重新計算以更新圖表與指標
+                </p>
+                <Button
+                  className="w-full shrink-0 sm:w-auto sm:min-w-[9rem]"
+                  onClick={() => load({ force: true })}
+                  disabled={loading || bgRefreshing}
+                >
+                  {loading ? "計算中…" : "重新計算"}
+                </Button>
+              </div>
+              {loading && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-[var(--color-muted)]">
+                    <span>{progressPhase ?? "計算中…"}</span>
+                    <span className="tabular-nums">{Math.round(progress)}%</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-card-border)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
         </CollapsibleCard>
       </PageSection>

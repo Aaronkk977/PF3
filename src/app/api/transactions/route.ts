@@ -91,11 +91,19 @@ export async function POST(request: NextRequest) {
 
   if (!instrument) {
     const { validateSymbol, inferAssetClass } = await import("@/lib/yahoo");
+    const { isTaiwanSymbol, fetchTaiwanChineseName, hasCjk } = await import(
+      "@/lib/instrument-display-name"
+    );
     const validated = await validateSymbol(symbol.toUpperCase());
+    let instrumentName: string | null = validated?.name ?? null;
+    if (isTaiwanSymbol(symbol) && (!instrumentName || !hasCjk(instrumentName))) {
+      const cn = await fetchTaiwanChineseName(symbol.toUpperCase()).catch(() => null);
+      if (cn) instrumentName = cn;
+    }
     instrument = await prisma.instrument.create({
       data: {
         symbol: symbol.toUpperCase(),
-        name: validated?.name,
+        name: instrumentName,
         assetClass: inferAssetClass(symbol.toUpperCase()),
         currency: validated?.currency,
       },

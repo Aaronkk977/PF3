@@ -53,3 +53,14 @@ export const PAGE_CACHE_KEYS = {
   holdings: "holdings",
   transactions: "transactions",
 } as const;
+
+/** Remove a single cache entry from both in-memory map and sessionStorage. */
+export function clearClientCache(key: string): void {
+  MEMORY.delete(key);
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(storageKey(key));
+  } catch {
+    // ignore
+  }
+}

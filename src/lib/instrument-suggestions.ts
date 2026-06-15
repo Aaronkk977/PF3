@@ -97,10 +97,12 @@ export function mergeInstrumentSuggestions(
   }
 
   merged.sort((a, b) => {
-    if (a.priority !== b.priority) return a.priority - b.priority;
+    // 1. 字串比對品質優先（前綴 > 包含）
     const scoreA = symbolMatchScore(a.symbol, a.name, query);
     const scoreB = symbolMatchScore(b.symbol, b.name, query);
     if (scoreA !== scoreB) return scoreA - scoreB;
+    // 2. 同品質時，最近交易／持倉順序優先
+    if (a.priority !== b.priority) return a.priority - b.priority;
     return a.symbol.localeCompare(b.symbol);
   });
 

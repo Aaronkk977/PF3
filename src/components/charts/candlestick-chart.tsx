@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   TradeTriangleMarkersPrimitive,
@@ -14,6 +14,7 @@ import {
   LineStyle,
   createChart,
   type IChartApi,
+  type ISeriesApi,
   type Time,
 } from "lightweight-charts";
 
@@ -58,28 +59,106 @@ function closingMA(
   if (data.length < period) return out;
   for (let i = period - 1; i < data.length; i++) {
     let sum = 0;
-    for (let k = i - period + 1; k <= i; k++) sum += data[k].close;
-    out.push({ time: data[i].date as Time, value: sum / period });
+    for (let k = i - period + 1; k <= i; k++) sum += data[k]!.close;
+    out.push({ time: data[i]!.date as Time, value: sum / period });
   }
   return out;
+}
+
+function mergeOhlc(a: OhlcData[], b: OhlcData[]): OhlcData[] {
+  const map = new Map<string, OhlcData>();
+  for (const d of [...a, ...b]) map.set(d.date, d);
+  return [...map.values()].sort((x, y) => x.date.localeCompare(y.date));
 }
 
 export function CandlestickChart({
   data,
   transactions = [],
+  symbol,
 }: {
   data: OhlcData[];
   transactions?: TransactionMarker[];
+  /** Symbol used to fetch older data on scroll-left. */
+  symbol?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const chartTheme = useChartTheme();
 
+  // Accumulated data (grows backwards as user scrolls left)
+  const allDataRef = useRef<OhlcData[]>([]);
+  // Series refs so we can update them from the fetch callback
+  const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const ma10Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma20Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma60Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma250Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const loadingRef = useRef(false);
+  // How far back we've already fetched (in years from today)
+  const fetchedYearsRef = useRef(1);
+
+  // Update all series with the current allDataRef content
+  function refreshSeries() {
+    const sorted = allDataRef.current;
+    candleRef.current?.setData(
+      sorted.map((d) => ({
+        time: d.date as Time,
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+      })),
+    );
+    ma10Ref.current?.setData(closingMA(sorted, 10));
+    ma20Ref.current?.setData(closingMA(sorted, 20));
+    ma60Ref.current?.setData(closingMA(sorted, 60));
+    ma250Ref.current?.setData(closingMA(sorted, 250));
+  }
+
+  async function fetchOlderData() {
+    if (!symbol || loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const nextYears = fetchedYearsRef.current + 1;
+      const end = new Date();
+      const endDate = new Date(
+        end.getFullYear() - fetchedYearsRef.current,
+        end.getMonth(),
+        end.getDate(),
+      );
+      const startDate = new Date(
+        end.getFullYear() - nextYears,
+        end.getMonth(),
+        end.getDate(),
+      );
+      const endStr = endDate.toISOString().slice(0, 10);
+      const startStr = startDate.toISOString().slice(0, 10);
+
+      const res = await fetch(
+        `/api/charts/${encodeURIComponent(symbol)}?start=${startStr}&end=${endStr}`,
+      );
+      if (!res.ok) return;
+      const older = (await res.json()) as OhlcData[];
+      if (!Array.isArray(older) || older.length === 0) return;
+
+      allDataRef.current = mergeOhlc(older, allDataRef.current);
+      fetchedYearsRef.current = nextYears;
+      refreshSeries();
+    } catch {
+      // swallow — user can scroll further to retry
+    } finally {
+      loadingRef.current = false;
+    }
+  }
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el || data.length === 0) return;
 
+    // Initialise accumulated data from the prop
     const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
+    allDataRef.current = sorted;
+    fetchedYearsRef.current = 1;
 
     const grid = withAlpha(chartTheme.cardBorder, 0.2);
     const chart = createChart(el, {
@@ -94,8 +173,10 @@ export function CandlestickChart({
       width: el.clientWidth || el.offsetWidth || 600,
       height: 400,
     });
+    chartRef.current = chart;
 
-    const series = chart.addSeries(CandlestickSeries, {
+    // ── Candlestick series ─────────────────────────────────────────────
+    const candle = chart.addSeries(CandlestickSeries, {
       upColor: chartTheme.positive,
       downColor: chartTheme.negative,
       borderUpColor: chartTheme.positive,
@@ -103,70 +184,68 @@ export function CandlestickChart({
       wickUpColor: chartTheme.positive,
       wickDownColor: chartTheme.negative,
     });
+    candleRef.current = candle;
 
-    series.setData(
-      sorted.map((d) => ({
-        time: d.date as Time,
-        open: d.open,
-        high: d.high,
-        low: d.low,
-        close: d.close,
-      })),
-    );
+    // ── MA series ─────────────────────────────────────────────────────
+    const ma10s = chart.addSeries(LineSeries, {
+      color: withAlpha(chartTheme.accent, 0.95),
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma10Ref.current = ma10s;
 
-    const ma10 = closingMA(sorted, 10);
-    const ma20 = closingMA(sorted, 20);
-    const ma60 = closingMA(sorted, 60);
-    const ma250 = closingMA(sorted, 250);
-    if (ma10.length > 0) {
-      const ma10Series = chart.addSeries(LineSeries, {
-        color: withAlpha(chartTheme.accent, 0.95),
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      ma10Series.setData(ma10);
-    }
-    if (ma20.length > 0) {
-      const ma20Series = chart.addSeries(LineSeries, {
-        color: withAlpha(chartTheme.primary, 0.9),
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      ma20Series.setData(ma20);
-    }
-    if (ma60.length > 0) {
-      const ma60Series = chart.addSeries(LineSeries, {
-        color: withAlpha(chartTheme.foreground, 0.45),
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      ma60Series.setData(ma60);
-    }
-    if (ma250.length > 0) {
-      const ma250Series = chart.addSeries(LineSeries, {
-        color: withAlpha(chartTheme.muted, 0.95),
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      ma250Series.setData(ma250);
-    }
+    const ma20s = chart.addSeries(LineSeries, {
+      color: withAlpha(chartTheme.primary, 0.9),
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma20Ref.current = ma20s;
 
+    const ma60s = chart.addSeries(LineSeries, {
+      color: withAlpha(chartTheme.foreground, 0.45),
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma60Ref.current = ma60s;
+
+    const ma250s = chart.addSeries(LineSeries, {
+      color: withAlpha(chartTheme.muted, 0.95),
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma250Ref.current = ma250s;
+
+    // Initial render
+    refreshSeries();
+
+    // Trade markers
     const triangles = new TradeTriangleMarkersPrimitive(
       tradeMarkersFromTransactions(transactions, sorted),
       { buy: chartTheme.positive, sell: chartTheme.negative },
     );
-    series.attachPrimitive(triangles);
+    candle.attachPrimitive(triangles);
 
     chart.timeScale().fitContent();
     chart.timeScale().applyOptions({ rightOffset: 14 });
-    chartRef.current = chart;
 
+    // ── Lazy-load older data when user scrolls to the left edge ────────
+    if (symbol) {
+      chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (!range) return;
+        // When the left edge is within 20 bars of the data start, fetch more
+        if (range.from < 20 && !loadingRef.current) {
+          void fetchOlderData();
+        }
+      });
+    }
+
+    // ── Resize handling ────────────────────────────────────────────────
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
@@ -184,7 +263,15 @@ export function CandlestickChart({
       ro?.disconnect();
       chart.remove();
       chartRef.current = null;
+      candleRef.current = null;
+      ma10Ref.current = null;
+      ma20Ref.current = null;
+      ma60Ref.current = null;
+      ma250Ref.current = null;
     };
+    // Re-create chart only when theme or initial data/transactions change.
+    // Scroll-triggered fetches mutate allDataRef directly via refreshSeries().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartTheme, data, transactions]);
 
   if (data.length === 0) {

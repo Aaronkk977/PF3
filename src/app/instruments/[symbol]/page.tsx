@@ -5,6 +5,11 @@ import {
   watchlistNameForSymbol,
 } from "@/lib/ensure-instrument";
 import { prisma } from "@/lib/db";
+import {
+  isTaiwanSymbol,
+  fetchTaiwanChineseName,
+  hasCjk,
+} from "@/lib/instrument-display-name";
 import { inferInstrumentCurrency } from "@/lib/instrument-currency";
 import {
   computeInstrumentPnl,
@@ -43,9 +48,20 @@ export default async function InstrumentPage({
     instrument = await ensureInstrument(symbol, { name: hintName });
   }
 
+  // Backfill: TW stocks that were created before the Chinese-name fix
+  if (isTaiwanSymbol(instrument.symbol) && (!instrument.name || !hasCjk(instrument.name))) {
+    try {
+      const cn = await fetchTaiwanChineseName(instrument.symbol);
+      if (cn) {
+        await prisma.instrument.update({ where: { id: instrument.id }, data: { name: cn } });
+        instrument = { ...instrument, name: cn };
+      }
+    } catch {}
+  }
+
   const end = new Date();
-  /** 兩年日線：足夠畫年線 MA250 並保留可視區間 */
-  const start = new Date(end.getFullYear() - 2, end.getMonth(), end.getDate());
+  /** 初始載入一年日線；K 線圖往左滑時會自動 lazy-load 更早的歷史資料 */
+  const start = new Date(end.getFullYear() - 1, end.getMonth(), end.getDate());
 
   let quote = null;
   let ohlc: Awaited<ReturnType<typeof getHistoricalPrices>> = [];

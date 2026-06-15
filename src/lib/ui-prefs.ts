@@ -80,6 +80,8 @@ export type TransactionsPrefs = {
   listFilterAccountIds?: string[];
   listFilterDateFrom?: string;
   listFilterDateTo?: string;
+  /** When true, the date filter always resolves to "today" on load. */
+  listFilterTodayMode?: boolean;
   listFilterSymbol?: string;
   listFiltersExpanded?: boolean;
   listColumnOrder?: string[];

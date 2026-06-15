@@ -147,6 +147,29 @@ input[type="time"] {
   font-family: var(--font-sans);
 }
 
+/*
+ * 深色主題：告訴瀏覽器這些欄位在深色背景下，
+ * 讓日曆／時鐘圖示自動轉成淺色，在黑底上可見。
+ */
+html[data-theme="cyberpunk"] input[type="date"],
+html[data-theme="cyberpunk"] input[type="datetime-local"],
+html[data-theme="cyberpunk"] input[type="time"],
+html:not([data-theme]) input[type="date"],
+html:not([data-theme]) input[type="datetime-local"],
+html:not([data-theme]) input[type="time"],
+html[data-theme="noir"] input[type="date"],
+html[data-theme="noir"] input[type="datetime-local"],
+html[data-theme="noir"] input[type="time"] {
+  color-scheme: dark;
+}
+
+/* 淺色主題明確設 light，避免被繼承 */
+html[data-theme="monochrome"] input[type="date"],
+html[data-theme="monochrome"] input[type="datetime-local"],
+html[data-theme="monochrome"] input[type="time"] {
+  color-scheme: light;
+}
+
 input[type="date"]::-webkit-datetime-edit,
 input[type="date"]::-webkit-datetime-edit-fields-wrapper,
 input[type="date"]::-webkit-datetime-edit-text,

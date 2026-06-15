@@ -3,7 +3,7 @@ import { searchInstruments } from "@/lib/instrument-search";
 import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { getQuote } from "@/lib/yahoo";
 
-function hasCjk(text: string): boolean {
+export function hasCjk(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
 }
 

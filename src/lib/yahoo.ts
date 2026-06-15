@@ -805,15 +805,20 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
       return applyTaiwanQuoteClose(symbol, base, undefined);
     }
     const price = extractYahooPrice(quote) || cached || 0;
-    let change = quote.regularMarketChange;
-    let changePercent = normalizeYahooChangePercent(
-      quote.regularMarketChangePercent,
-    );
-
+    let change = quote.regularMarketChange ?? undefined;
     const prev = quote.regularMarketPreviousClose ?? null;
-    if ((change === undefined || change === null) && prev != null && price > 0) {
+
+    // Prefer computing changePercent from absolute values — no unit ambiguity.
+    // normalizeYahooChangePercent() guesses units by magnitude and fails when
+    // the change is tiny (e.g. ^TWII ±0.1 % would be misread as ±10 %).
+    let changePercent: number | undefined;
+    if (change != null && prev != null && prev > 0) {
+      changePercent = change / prev;
+    } else if (change == null && prev != null && price > 0) {
       change = price - prev;
       changePercent = prev > 0 ? change / prev : undefined;
+    } else {
+      changePercent = normalizeYahooChangePercent(quote.regularMarketChangePercent);
     }
 
     if (change === undefined || change === null) {
@@ -895,22 +900,30 @@ export async function getHistoricalPrices(
     }));
   }
 
+  const cachedBars = cached.map((c) => ({
+    date: toLocalDateKey(c.date),
+    open: c.open ?? c.close,
+    high: c.high ?? c.close,
+    low: c.low ?? c.close,
+    close: c.close,
+    volume: c.volume ?? undefined,
+  }));
+
   try {
     const history = await fetchChart(symbol, periodStart, periodEnd);
+
+    // fetchChart swallows errors and returns [] on timeout / network failure.
+    // If we got nothing back but have stale cached rows, serve the cache rather
+    // than returning an empty chart.
+    if (history.length === 0) {
+      return cachedBars;
+    }
+
     const sorted = history.sort((a, b) => a.date.localeCompare(b.date));
-
     enqueuePriceCacheWrite(() => persistPriceHistory(symbol, sorted));
-
     return sorted;
   } catch {
-    return cached.map((c) => ({
-      date: toLocalDateKey(c.date),
-      open: c.open ?? c.close,
-      high: c.high ?? c.close,
-      low: c.low ?? c.close,
-      close: c.close,
-      volume: c.volume ?? undefined,
-    }));
+    return cachedBars;
   }
 }
 

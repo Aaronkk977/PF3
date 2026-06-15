@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MarkdownNotesEditor } from "@/components/ui/markdown-notes-editor";
 import { MarkdownPreview } from "@/components/ui/markdown-preview";
+import { clearClientCache, PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import { convertFromTwd } from "@/lib/fx-convert";
 import type { InstrumentPnlSummary } from "@/lib/instrument-pnl";
 import type { QuoteResult } from "@/lib/yahoo";
@@ -49,8 +50,8 @@ export function InstrumentDetailClient({
   monthChangePct,
   quarterChangePct,
   yearChangePct,
-  hasHistoricalBars,
-  ohlc,
+  hasHistoricalBars: initialHasHistoricalBars,
+  ohlc: initialOhlc,
   allTags,
   transactions,
   transactionHistory,
@@ -80,6 +81,27 @@ export function InstrumentDetailClient({
   const [twdToBase, setTwdToBase] = useState<number | null>(1);
   const [displayName, setDisplayName] = useState(instrument.name ?? "");
   const [notes, setNotes] = useState(instrument.notes ?? "");
+
+  // Client-side OHLC fallback: when the server render got no data (Yahoo
+  // timed out), try fetching the chart data directly from the browser.
+  const [ohlc, setOhlc] = useState<OhlcData[]>(initialOhlc);
+  const [chartLoading, setChartLoading] = useState(false);
+  const hasHistoricalBars = ohlc.length >= 2;
+
+  useEffect(() => {
+    if (ohlc.length > 0) return; // already have data
+    setChartLoading(true);
+    fetch(`/api/charts/${encodeURIComponent(instrument.symbol)}`)
+      .then(async (r) => {
+        if (!r.ok) return;
+        const bars = (await r.json()) as OhlcData[];
+        if (Array.isArray(bars) && bars.length > 0) setOhlc(bars);
+      })
+      .catch(() => {})
+      .finally(() => setChartLoading(false));
+  // Run once on mount only
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [notesEditing, setNotesEditing] = useState(
     () => !(instrument.notes ?? "").trim(),
   );
@@ -158,6 +180,12 @@ export function InstrumentDetailClient({
         setNotesEditing(false);
       }
       setProfileSaved(true);
+      // Invalidate all page-level client caches that embed instrument names,
+      // so Holdings / Transactions / Dashboard show the new name immediately
+      // on next visit instead of serving stale sessionStorage data.
+      clearClientCache(PAGE_CACHE_KEYS.dashboard);
+      clearClientCache(PAGE_CACHE_KEYS.holdings);
+      clearClientCache(PAGE_CACHE_KEYS.transactions);
       router.refresh();
     } finally {
       setProfileSaving(false);
@@ -405,10 +433,14 @@ export function InstrumentDetailClient({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {chartType === "line" ? (
+            {chartLoading ? (
+              <div className="flex h-[400px] items-center justify-center rounded-lg border border-[var(--color-card-border)] bg-[var(--color-card)] text-sm text-[var(--color-muted)]">
+                載入圖表資料中…
+              </div>
+            ) : chartType === "line" ? (
               <SimpleLineChart data={ohlc} />
             ) : (
-              <CandlestickChart data={ohlc} transactions={transactions} />
+              <CandlestickChart data={ohlc} transactions={transactions} symbol={instrument.symbol} />
             )}
             {chartType !== "line" && (
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-muted)]">

@@ -222,12 +222,14 @@ export function roundToTaiwanTick(price: number, refPrice?: number): number {
   return Math.round(price / tick) * tick;
 }
 
-/** 推斷適用漲跌幅（一般上市櫃 10%；接近 5% 者視為 5% 限制標的） */
+/**
+ * 台股適用漲跌幅。
+ * 一般上市/上櫃皆為 10%；5% 限制標的需透過明確的外部資料才能判斷，
+ * 無法從當天漲幅反推（若漲幅碰巧在 ~5% 會造成誤判），故固定回傳 10%。
+ */
 export function inferTaiwanLimitPercent(
-  changePct: number | null | undefined,
+  _changePct?: number | null,
 ): number {
-  const pct = normalizeChangePercentDecimal(changePct);
-  if (pct != null && pct >= 0.045 && pct <= 0.055) return 0.05;
   return 0.1;
 }
 
