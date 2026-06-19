@@ -161,6 +161,195 @@ async function searchTransactions(args: {
   }));
 }
 
+// ── tool: get_trading_review ─────────────────────────────────────────────────
+
+function periodToDates(period: string): { from: Date; to: Date } {
+  const to = new Date();
+  to.setHours(23, 59, 59, 999);
+  const from = new Date();
+  from.setHours(0, 0, 0, 0);
+  if (period === "1w") from.setDate(from.getDate() - 7);
+  else if (period === "2w") from.setDate(from.getDate() - 14);
+  else if (period === "1m") from.setMonth(from.getMonth() - 1);
+  else if (period === "3m") from.setMonth(from.getMonth() - 3);
+  else if (period === "ytd") { from.setMonth(0); from.setDate(1); }
+  else from.setDate(from.getDate() - 7);
+  return { from, to };
+}
+
+async function getTradingReview(args: {
+  period?: string;
+  date_from?: string;
+  date_to?: string;
+  pnl_filter?: "loss" | "profit" | "realized" | "all";
+  symbol?: string;
+}) {
+  let from: Date, to: Date;
+  if (args.date_from || args.date_to) {
+    from = args.date_from ? new Date(args.date_from) : new Date(0);
+    to = args.date_to ? new Date(args.date_to + "T23:59:59Z") : new Date();
+  } else {
+    ({ from, to } = periodToDates(args.period ?? "1w"));
+  }
+
+  // 1. Transactions in the review period
+  const periodTxs = await prisma.transaction.findMany({
+    where: { date: { gte: from, lte: to }, type: { in: ["BUY", "SELL"] } },
+    include: { instrument: true, account: { select: { name: true } } },
+    orderBy: { date: "asc" },
+  });
+
+  // 2. For realized P&L: need full history per symbol that had SELLs in period
+  const sellSymbols = [
+    ...new Set(
+      periodTxs
+        .filter((t) => t.type === "SELL" && t.instrument)
+        .map((t) => t.instrument!.symbol),
+    ),
+  ];
+
+  const historicalTxs = sellSymbols.length
+    ? await prisma.transaction.findMany({
+        where: {
+          instrument: { symbol: { in: sellSymbols } },
+          type: { in: ["BUY", "SELL"] },
+          date: { lt: from },
+        },
+        include: { instrument: true },
+        orderBy: { date: "asc" },
+      })
+    : [];
+
+  // Compute avg cost per symbol from history before the period
+  const avgCostMap = new Map<string, { qty: number; costBasis: number }>();
+  for (const tx of historicalTxs) {
+    if (!tx.instrument) continue;
+    const sym = tx.instrument.symbol;
+    if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0 });
+    const pos = avgCostMap.get(sym)!;
+    const qty = toNum(tx.quantity);
+    const px = toNum(tx.price);
+    const fees = toNum(tx.fee) + toNum(tx.tax);
+    if (tx.type === "BUY") { pos.costBasis += qty * px + fees; pos.qty += qty; }
+    else if (tx.type === "SELL" && pos.qty > 0) {
+      pos.costBasis -= (pos.costBasis / pos.qty) * qty;
+      pos.qty -= qty;
+    }
+  }
+
+  // 3. Aggregate per-symbol activity during the period
+  type SymActivity = {
+    symbol: string; name: string | null;
+    buyQty: number; buyAmt: number; buyCount: number;
+    sellQty: number; sellAmt: number; sellCount: number;
+    realizedPnl: number | null;
+    notes: string[];
+  };
+  const symMap = new Map<string, SymActivity>();
+
+  for (const tx of periodTxs) {
+    if (!tx.instrument) continue;
+    const sym = tx.instrument.symbol;
+    if (!symMap.has(sym)) {
+      symMap.set(sym, {
+        symbol: sym, name: tx.instrument.name,
+        buyQty: 0, buyAmt: 0, buyCount: 0,
+        sellQty: 0, sellAmt: 0, sellCount: 0,
+        realizedPnl: null, notes: [],
+      });
+    }
+    const act = symMap.get(sym)!;
+    const qty = toNum(tx.quantity);
+    const px = toNum(tx.price);
+    const fees = toNum(tx.fee) + toNum(tx.tax);
+
+    if (tx.type === "BUY") {
+      act.buyQty += qty; act.buyAmt += qty * px + fees; act.buyCount++;
+      if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0 });
+      const pos = avgCostMap.get(sym)!;
+      pos.costBasis += qty * px + fees; pos.qty += qty;
+    } else if (tx.type === "SELL") {
+      act.sellQty += qty; act.sellAmt += qty * px - fees; act.sellCount++;
+      if (avgCostMap.has(sym)) {
+        const pos = avgCostMap.get(sym)!;
+        if (pos.qty > 0) {
+          const avgCost = pos.costBasis / pos.qty;
+          act.realizedPnl = (act.realizedPnl ?? 0) + (px - avgCost) * qty - fees;
+          pos.costBasis -= avgCost * qty;
+          pos.qty -= qty;
+        }
+      }
+    }
+    if (tx.note) act.notes.push(`[${fmtDate(tx.date)}] ${tx.note}`);
+  }
+
+  // 4. Filter + sort
+  let activities = [...symMap.values()];
+
+  // symbol filter
+  if (args.symbol) {
+    const sym = args.symbol.toUpperCase();
+    activities = activities.filter((a) => a.symbol.toUpperCase().includes(sym));
+  }
+
+  // pnl filter
+  const pnlFilter = args.pnl_filter ?? "all";
+  if (pnlFilter === "loss") {
+    activities = activities.filter((a) => a.realizedPnl != null && a.realizedPnl < 0);
+    activities.sort((a, b) => (a.realizedPnl ?? 0) - (b.realizedPnl ?? 0)); // worst first
+  } else if (pnlFilter === "profit") {
+    activities = activities.filter((a) => a.realizedPnl != null && a.realizedPnl > 0);
+    activities.sort((a, b) => (b.realizedPnl ?? 0) - (a.realizedPnl ?? 0)); // best first
+  } else if (pnlFilter === "realized") {
+    activities = activities.filter((a) => a.realizedPnl != null);
+    activities.sort((a, b) => (b.realizedPnl ?? 0) - (a.realizedPnl ?? 0));
+  } else {
+    activities.sort((a, b) => (b.buyAmt + b.sellAmt) - (a.buyAmt + a.sellAmt));
+  }
+
+  const totalBuyAmt = [...symMap.values()].reduce((s, a) => s + a.buyAmt, 0);
+  const totalSellAmt = [...symMap.values()].reduce((s, a) => s + a.sellAmt, 0);
+  const totalRealizedPnl = [...symMap.values()].reduce((s, a) => s + (a.realizedPnl ?? 0), 0);
+
+  return {
+    period: { from: fmtDate(from), to: fmtDate(to) },
+    filters: { pnl_filter: pnlFilter, symbol: args.symbol ?? null },
+    summary: {
+      totalTransactions: periodTxs.length,
+      totalBuyAmt: Math.round(totalBuyAmt),
+      totalSellAmt: Math.round(totalSellAmt),
+      totalRealizedPnl: Math.round(totalRealizedPnl),
+      symbolsTraded: [...symMap.values()].length,
+      matchedSymbols: activities.length,
+    },
+    bySymbol: activities
+      .map((a) => ({
+        symbol: a.symbol,
+        name: a.name,
+        bought: a.buyCount > 0
+          ? { times: a.buyCount, qty: Math.round(a.buyQty), amount: Math.round(a.buyAmt) }
+          : null,
+        sold: a.sellCount > 0
+          ? { times: a.sellCount, qty: Math.round(a.sellQty), amount: Math.round(a.sellAmt) }
+          : null,
+        realizedPnl: a.realizedPnl != null ? Math.round(a.realizedPnl) : null,
+        notes: a.notes,
+      })),
+    allTransactions: periodTxs.map((t) => ({
+      date: fmtDate(t.date),
+      type: t.type,
+      account: t.account.name,
+      symbol: t.instrument?.symbol ?? null,
+      name: t.instrument?.name ?? null,
+      qty: toNum(t.quantity),
+      price: toNum(t.price),
+      fee: toNum(t.fee),
+      tax: toNum(t.tax),
+      note: t.note ?? null,
+    })),
+  };
+}
+
 // ── tool: get_portfolio_summary ──────────────────────────────────────────────
 
 async function getPortfolioSummary() {
@@ -275,6 +464,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "回傳整體組合概況：總市值、總成本、未實現損益、現金、帳戶列表、依資產類別拆解",
       inputSchema: { type: "object", properties: {}, required: [] },
     },
+    {
+      name: "get_trading_review",
+      description:
+        "回顧指定期間的交易活動，包含每筆交易明細、每個標的的買賣次數與金額、已實現損益，以及交易備註。適合用於週/月操作複盤。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          period: {
+            type: "string",
+            description: "快速選擇：1w（近一週）、2w（近兩週）、1m（近一個月）、3m（近三個月）、ytd（今年以來）。與 date_from/date_to 二擇一",
+          },
+          date_from: { type: "string", description: "起始日期 YYYY-MM-DD" },
+          date_to: { type: "string", description: "結束日期 YYYY-MM-DD" },
+          pnl_filter: {
+            type: "string",
+            description: "已實現損益篩選：loss（只看虧損，由大到小）、profit（只看獲利，由高到低）、realized（所有有實現損益的標的）、all（全部，預設）",
+          },
+          symbol: { type: "string", description: "只看特定代號（部分比對），例如 '2330'" },
+        },
+      },
+    },
   ],
 }));
 
@@ -292,6 +502,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       result = await searchTransactions(a);
     } else if (name === "get_portfolio_summary") {
       result = await getPortfolioSummary();
+    } else if (name === "get_trading_review") {
+      result = await getTradingReview(args as { period?: string; date_from?: string; date_to?: string; pnl_filter?: "loss" | "profit" | "realized" | "all"; symbol?: string });
     } else {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }

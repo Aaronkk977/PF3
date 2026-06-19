@@ -4,6 +4,7 @@ import {
   writeClientCache,
 } from "@/lib/client-data-cache";
 import { parseResponseJson } from "@/lib/utils";
+import { PERFORMANCE_PREFS_KEY } from "@/lib/performance-cache-client";
 
 /** Holdings only on idle prefetch — transactions is heavy and can race Next dev compile. */
 const PREFETCH_TARGETS = [
@@ -70,18 +71,38 @@ export function prefetchPerformanceWarm(): void {
   performanceWarmScheduled = true;
 
   scheduleIdle(() => {
-    const end = new Date();
-    const start = new Date(
-      end.getFullYear() - 1,
-      end.getMonth(),
-      end.getDate(),
-    );
-    const startStr = start.toISOString().slice(0, 10);
-    const endStr = end.toISOString().slice(0, 10);
-    void fetch(
-      `/api/performance?start=${startStr}&end=${endStr}`,
-      { cache: "no-store" },
-    ).catch(() => {});
+    try {
+      const raw = localStorage.getItem(PERFORMANCE_PREFS_KEY);
+      const prefs = raw
+        ? (JSON.parse(raw) as {
+            start?: string;
+            end?: string;
+            accountIds?: string[];
+            benchmarks?: string[];
+          })
+        : null;
+
+      const now = new Date();
+      const defaultStart = new Date(
+        now.getFullYear() - 1,
+        now.getMonth(),
+        now.getDate(),
+      );
+      const startStr = prefs?.start ?? defaultStart.toISOString().slice(0, 10);
+      const endStr = prefs?.end ?? now.toISOString().slice(0, 10);
+      const accounts = (prefs?.accountIds ?? []).join(",");
+      const benchmarks = (prefs?.benchmarks ?? []).join(",");
+
+      const params = new URLSearchParams({ start: startStr, end: endStr });
+      if (accounts) params.set("accounts", accounts);
+      if (benchmarks) params.set("benchmarks", benchmarks);
+
+      void fetch(`/api/performance?${params.toString()}`, {
+        cache: "no-store",
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
   });
 }
 

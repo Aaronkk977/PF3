@@ -23,6 +23,7 @@ import { formatSymbolWithName } from "@/lib/instrument-nav";
 import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { isBuiltinWatchlistName } from "@/lib/watchlist-presets";
 import { WatchlistItemsList } from "@/components/portfolio/watchlist-items-list";
+import { ScreenerPanel } from "@/components/portfolio/screener-panel";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
 import {
   PAGE_CACHE_KEYS,
@@ -70,6 +71,7 @@ export function DashboardClient({
     return initialWatchlists[0]?.id ?? "";
   });
   const [watchlistPrefsReady, setWatchlistPrefsReady] = useState(false);
+  const [watchlistTab, setWatchlistTab] = useState<"list" | "screener">("list");
   const [symbolQuery, setSymbolQuery] = useState("");
   const [resolvedSymbol, setResolvedSymbol] = useState<string | null>(null);
   const [resolvedName, setResolvedName] = useState<string | null>(null);
@@ -383,128 +385,172 @@ export function DashboardClient({
           <CardHeader className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle>追蹤清單</CardTitle>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowNewList((v) => !v)}
-              >
-                {showNewList ? "取消" : "新增清單"}
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {lists.map((list) => (
-                <button
-                  key={list.id}
-                  type="button"
-                  onClick={() => setActiveListId(list.id)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                    list.id === activeList?.id
-                      ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] ring-1 ring-[var(--color-primary)]/40"
-                      : "bg-[var(--color-card-border)]/30 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-                  }`}
-                >
-                  {list.name}
-                  <span className="ml-1 opacity-60">({list.items.length})</span>
-                </button>
-              ))}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {showNewList && (
-              <form
-                onSubmit={createList}
-                className="flex flex-nowrap items-stretch gap-2"
-              >
-                <Input
-                  className="min-w-0 flex-1"
-                  value={newListName}
-                  onChange={(e) => setNewListName(e.target.value)}
-                  placeholder="新清單名稱"
-                />
-                <Button
-                  type="submit"
-                  disabled={loading}
-                  className="shrink-0 whitespace-nowrap px-5"
-                >
-                  建立
-                </Button>
-              </form>
-            )}
-
-            {activeList && (
-              <>
-                <form
-                  onSubmit={addWatchlistItem}
-                  className="flex flex-nowrap items-stretch gap-2"
-                >
-                  <div className="relative min-w-0 flex-1">
-                    <SymbolSearchInput
-                      value={symbolQuery}
-                      suggestions={symbolSuggestions}
-                      onQueryChange={handleSymbolQuery}
-                      onSelect={handleSymbolSelect}
-                      placeholder="台積電 / 2330 / AAPL / BTC-USD"
-                    />
-                  </div>
-                  <Button
-                    type="submit"
-                    disabled={loading || !effectiveSymbol}
-                    className="shrink-0 whitespace-nowrap px-5"
+              <div className="flex items-center gap-2">
+                {/* Tab 切換 */}
+                {(["list", "screener"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setWatchlistTab(tab)}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      watchlistTab === tab
+                        ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                        : "text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                    }`}
                   >
-                    加入
-                  </Button>
-                </form>
-
-                <div className="flex flex-wrap gap-2 border-t border-[var(--color-card-border)]/40 pt-3">
-                  {!isBuiltinList && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={loading}
-                      onClick={() => void renameActiveList()}
-                    >
-                      重新命名
-                    </Button>
-                  )}
+                    {tab === "list" ? "清單" : "篩選"}
+                  </button>
+                ))}
+                {watchlistTab === "list" && (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={loading || activeList.items.length === 0}
-                    onClick={() => void clearActiveList()}
+                    onClick={() => setShowNewList((v) => !v)}
                   >
-                    清空標的
+                    {showNewList ? "取消" : "新增清單"}
                   </Button>
-                  {!isBuiltinList && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={loading}
-                      className="text-[var(--color-negative)] hover:border-[var(--color-negative)]/50"
-                      onClick={() => void deleteActiveList()}
-                    >
-                      刪除清單
-                    </Button>
-                  )}
-                </div>
+                )}
+              </div>
+            </div>
+            {watchlistTab === "list" && (
+              <div className="flex flex-wrap gap-2">
+                {lists.map((list) => (
+                  <button
+                    key={list.id}
+                    type="button"
+                    onClick={() => setActiveListId(list.id)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      list.id === activeList?.id
+                        ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] ring-1 ring-[var(--color-primary)]/40"
+                        : "bg-[var(--color-card-border)]/30 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                    }`}
+                  >
+                    {list.name}
+                    <span className="ml-1 opacity-60">({list.items.length})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* ── 篩選 tab ── */}
+            {watchlistTab === "screener" && (
+              <ScreenerPanel
+                watchlistId={activeList?.id}
+                onAddToWatchlist={async (symbol, name) => {
+                  if (!activeList) return;
+                  await fetch("/api/watchlist", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ listId: activeList.id, symbol, name }),
+                  });
+                  const updated = await fetchWatchlists();
+                  setLists(updated);
+                  persistWatchlistsToCache(updated);
+                }}
+              />
+            )}
 
-                <WatchlistItemsList
-                  listId={activeList.id}
-                  items={activeList.items}
-                  onItemsChange={(items) =>
-                    setLists((prev) => {
-                      const next = prev.map((l) =>
-                        l.id === activeList.id ? { ...l, items } : l,
-                      );
-                      persistWatchlistsToCache(next);
-                      return next;
-                    })
-                  }
-                  onRemove={removeWatchlistItem}
-                />
+            {/* ── 清單 tab ── */}
+            {watchlistTab === "list" && (
+              <>
+                {showNewList && (
+                  <form
+                    onSubmit={createList}
+                    className="flex flex-nowrap items-stretch gap-2"
+                  >
+                    <Input
+                      className="min-w-0 flex-1"
+                      value={newListName}
+                      onChange={(e) => setNewListName(e.target.value)}
+                      placeholder="新清單名稱"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={loading}
+                      className="shrink-0 whitespace-nowrap px-5"
+                    >
+                      建立
+                    </Button>
+                  </form>
+                )}
+
+                {activeList && (
+                  <>
+                    <form
+                      onSubmit={addWatchlistItem}
+                      className="flex flex-nowrap items-stretch gap-2"
+                    >
+                      <div className="relative min-w-0 flex-1">
+                        <SymbolSearchInput
+                          value={symbolQuery}
+                          suggestions={symbolSuggestions}
+                          onQueryChange={handleSymbolQuery}
+                          onSelect={handleSymbolSelect}
+                          placeholder="台積電 / 2330 / AAPL / BTC-USD"
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        disabled={loading || !effectiveSymbol}
+                        className="shrink-0 whitespace-nowrap px-5"
+                      >
+                        加入
+                      </Button>
+                    </form>
+
+                    <div className="flex flex-wrap gap-2 border-t border-[var(--color-card-border)]/40 pt-3">
+                      {!isBuiltinList && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={loading}
+                          onClick={() => void renameActiveList()}
+                        >
+                          重新命名
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={loading || activeList.items.length === 0}
+                        onClick={() => void clearActiveList()}
+                      >
+                        清空標的
+                      </Button>
+                      {!isBuiltinList && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={loading}
+                          className="text-[var(--color-negative)] hover:border-[var(--color-negative)]/50"
+                          onClick={() => void deleteActiveList()}
+                        >
+                          刪除清單
+                        </Button>
+                      )}
+                    </div>
+
+                    <WatchlistItemsList
+                      listId={activeList.id}
+                      items={activeList.items}
+                      onItemsChange={(items) =>
+                        setLists((prev) => {
+                          const next = prev.map((l) =>
+                            l.id === activeList.id ? { ...l, items } : l,
+                          );
+                          persistWatchlistsToCache(next);
+                          return next;
+                        })
+                      }
+                      onRemove={removeWatchlistItem}
+                    />
+                  </>
+                )}
               </>
             )}
           </CardContent>

@@ -1053,12 +1053,27 @@ export function TransactionsClient({
               <span className="text-sm font-medium">篩選</span>
               <span className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
                 {!filtersExpanded && activeFilterCount > 0 && (
-                    <span>已選 {activeFilterCount} 項</span>
-                  )}
-                <span aria-hidden>{filtersExpanded ? "收起 ▲" : "展開 ▼"}</span>
+                  <span>已選 {activeFilterCount} 項</span>
+                )}
+                <svg
+                  aria-hidden
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`h-3.5 w-3.5 shrink-0 transition-transform duration-300 ease-in-out ${filtersExpanded ? "rotate-180" : "rotate-0"}`}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
               </span>
             </button>
-            {filtersExpanded && (
+            <div
+              className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${filtersExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+            >
+              <div className="overflow-hidden">
               <div className="space-y-4 border-t border-[var(--color-card-border)]/60 px-4 pb-4 pt-3">
             <div>
               <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
@@ -1183,7 +1198,8 @@ export function TransactionsClient({
               </Button>
             )}
               </div>
-            )}
+              </div>
+            </div>
           </div>
 
           <TransactionsTable

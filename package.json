@@ -22,6 +22,8 @@
     "import:convert": "tsx scripts/convert-import-files.ts",
     "instruments:sync-currency": "tsx scripts/sync-instrument-currencies.ts",
     "watchlists:migrate": "tsx scripts/apply-watchlist-schema.ts",
+    "market:sync": "tsx scripts/market-sync.ts",
+    "market:sync:history": "tsx scripts/market-sync.ts --history",
     "postinstall": "prisma generate"
   },
   "dependencies": {

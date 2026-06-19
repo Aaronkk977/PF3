@@ -147,3 +147,25 @@ model PriceCache {
   @@unique([symbol, date])
   @@index([symbol])
 }
+
+/// 全市場盤後快照（來源：TWSE / TPEx 公開資料）
+model MarketDailySnapshot {
+  id            String   @id @default(cuid())
+  symbol        String
+  name          String?
+  date          String   // YYYY-MM-DD
+  open          Float?
+  high          Float?
+  low           Float?
+  close         Float
+  volume        Float    // 成交股數
+  turnover      Float?   // 成交金額（元）
+  changePercent Float?
+  exchange      String   // "TWSE" | "TPEx"
+  createdAt     DateTime @default(now())
+
+  @@unique([symbol, date])
+  @@index([symbol])
+  @@index([date])
+  @@index([exchange, date])
+}

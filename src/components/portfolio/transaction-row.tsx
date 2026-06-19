@@ -418,9 +418,9 @@ export function TransactionRow({
         );
       case "note":
         return (
-          <td key={col} className="py-3 pr-4 align-middle">
+          <td key={col} className="max-w-[14rem] py-3 pr-4 align-middle">
             <div className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 text-[var(--color-muted)] leading-normal">
+              <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]" title={tx.note ?? undefined}>
                 {tx.note?.trim() ? tx.note : "—"}
               </span>
               <Button

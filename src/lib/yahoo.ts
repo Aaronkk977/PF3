@@ -808,11 +808,17 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
     let change = quote.regularMarketChange ?? undefined;
     const prev = quote.regularMarketPreviousClose ?? null;
 
-    // Prefer computing changePercent from absolute values — no unit ambiguity.
-    // normalizeYahooChangePercent() guesses units by magnitude and fails when
-    // the change is tiny (e.g. ^TWII ±0.1 % would be misread as ±10 %).
+    // PriceCache has reliable daily closes written by our own fetcher.
+    // Yahoo's regularMarketPreviousClose can lag by a day when a bar is missing
+    // in Yahoo's own chart (e.g. ^TWII on public holidays where Yahoo stores null).
+    // If our cache has today's close AND a previous close, prefer that for the
+    // change/changePercent calculation — it's unambiguous.
+    const cacheChange = await getDayChangeFromCache(symbol);
     let changePercent: number | undefined;
-    if (change != null && prev != null && prev > 0) {
+    if (cacheChange?.changePercent != null) {
+      change = cacheChange.change;
+      changePercent = cacheChange.changePercent;
+    } else if (change != null && prev != null && prev > 0) {
       changePercent = change / prev;
     } else if (change == null && prev != null && price > 0) {
       change = price - prev;
