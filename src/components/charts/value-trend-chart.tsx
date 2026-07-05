@@ -142,18 +142,7 @@ function rowValueMax(row: ChartRow, lineKeys: string[]): number {
   return max;
 }
 
-function rowValueMin(row: ChartRow, lineKeys: string[]): number {
-  let min = Infinity;
-  for (const key of lineKeys) {
-    const v = row[key];
-    if (typeof v === "number" && Number.isFinite(v)) {
-      min = Math.min(min, v);
-    }
-  }
-  return min === Infinity ? 0 : min;
-}
-
-function downsampleRows(rows: ChartRow[], lineKeys: string[]): ChartRow[] {
+function downsampleRows(rows: ChartRow[]): ChartRow[] {
   const n = rows.length;
   if (n <= 2) return rows;
   const span = spanDays(rows);
@@ -463,7 +452,7 @@ export function ValueTrendChart({
   const curveType = useMemo(() => lineCurveType(span), [span]);
 
   const { rows: chartRows, yDomain, flowBaseline } = useMemo(() => {
-    const sampled = downsampleRows(chartData as ChartRow[], lineKeys);
+    const sampled = downsampleRows(chartData as ChartRow[]);
     return enrichFlowBars(sampled, lineKeys);
   }, [chartData, lineKeys]);
 

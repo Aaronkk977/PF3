@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 乖離率計算 ─────────────────────────────────────────────────────────────
-  let biasMap = new Map<string, number>();
+  const biasMap = new Map<string, number>();
   if (hasBiasFilter) {
     const tradingDates = await prisma.marketDailySnapshot.findMany({
       distinct: ["date"],

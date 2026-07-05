@@ -40,7 +40,6 @@ import {
 } from "@/lib/performance-cache-client";
 import { useChartTheme } from "@/hooks/use-chart-theme";
 import { resolveAccountSwatchColor } from "@/lib/chart-palette";
-import { isGrayscaleChartTheme } from "@/lib/theme-utils";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";
 import { changePositive, formatPercent, isFlatChange } from "@/lib/utils";
 
@@ -175,7 +174,6 @@ export function PerformanceClient({
   >(null);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
   const chartTheme = useChartTheme();
-  const grayscaleCharts = isGrayscaleChartTheme(chartTheme);
 
   const syncPeriodEndToToday = useCallback(
     (
@@ -281,6 +279,7 @@ export function PerformanceClient({
       }
     }
     setPrefsReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init local prefs once on mount
   }, []);
 
   useEffect(() => {
@@ -515,7 +514,14 @@ export function PerformanceClient({
         }
       }
     },
-    [start, end, selectedAccountIds, selectedBenchmarks, showEntirePortfolio],
+    [
+      start,
+      end,
+      selectedAccountIds,
+      selectedBenchmarks,
+      showEntirePortfolio,
+      persistPeriodPrefs,
+    ],
   );
 
   useEffect(() => {

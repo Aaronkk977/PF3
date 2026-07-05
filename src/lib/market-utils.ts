@@ -227,9 +227,7 @@ export function roundToTaiwanTick(price: number, refPrice?: number): number {
  * 一般上市/上櫃皆為 10%；5% 限制標的需透過明確的外部資料才能判斷，
  * 無法從當天漲幅反推（若漲幅碰巧在 ~5% 會造成誤判），故固定回傳 10%。
  */
-export function inferTaiwanLimitPercent(
-  _changePct?: number | null,
-): number {
+export function inferTaiwanLimitPercent(): number {
   return 0.1;
 }
 
@@ -282,7 +280,7 @@ export function isTaiwanLimitUp(
 
   if (prevClose == null || prevClose <= 0) return false;
 
-  const limitPct = inferTaiwanLimitPercent(pct);
+  const limitPct = inferTaiwanLimitPercent();
 
   if (price != null && price > 0) {
     return isPriceAtTaiwanLimitUp(price, prevClose, limitPct);

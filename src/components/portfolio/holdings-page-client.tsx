@@ -47,7 +47,7 @@ export function HoldingsPageClient() {
         allTags={data.allTags}
         totalCashBase={data.totalCashBase}
         cashByAccount={data.cashByAccount}
-        onRefresh={() => void refresh({ silent: false })}
+        onRefresh={() => void refresh()}
       />
     </>
   );

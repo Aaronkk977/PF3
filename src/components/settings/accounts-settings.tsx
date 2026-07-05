@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CurrencySelect } from "@/components/settings/currency-select";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,6 @@ import {
   displayFeePermille,
   displayTaxPermille,
 } from "@/lib/account-fee-rules";
-import { loadCurrencyList } from "@/lib/currencies";
 
 export function AccountsSettings({
   initialAccounts,
@@ -24,17 +23,8 @@ export function AccountsSettings({
   const [loading, setLoading] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCurrency, setNewCurrency] = useState("TWD");
-  const [currencies, setCurrencies] = useState<string[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, SerializedAccount>>({});
-
-  useEffect(() => {
-    const refresh = () => setCurrencies(loadCurrencyList());
-    refresh();
-    window.addEventListener("portfolio-currencies-updated", refresh);
-    return () =>
-      window.removeEventListener("portfolio-currencies-updated", refresh);
-  }, []);
 
   function getDraft(acc: SerializedAccount): SerializedAccount {
     return drafts[acc.id] ?? acc;

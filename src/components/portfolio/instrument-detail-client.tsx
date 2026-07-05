@@ -10,10 +10,8 @@ import {
   type TransactionMarker,
 } from "@/components/charts/candlestick-chart";
 import { SimpleLineChart } from "@/components/charts/simple-line-chart";
-import {
-  InstrumentTransactionsTable,
-  type InstrumentTransactionRow,
-} from "@/components/portfolio/instrument-transactions-table";
+import { TransactionsTable } from "@/components/portfolio/transactions-table";
+import type { EditableTransaction } from "@/components/portfolio/transaction-row";
 import { PageSection } from "@/components/layout/page-sections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +31,19 @@ import {
   parseResponseJson,
 } from "@/lib/utils";
 
+import type { TxColumnId } from "@/lib/transaction-table-columns";
+
+const INSTRUMENT_TX_COLUMN_ORDER: TxColumnId[] = [
+  "date",
+  "account",
+  "type",
+  "quantity",
+  "price",
+  "fee",
+  "tax",
+  "note",
+];
+
 type Instrument = {
   id: string;
   symbol: string;
@@ -50,11 +61,11 @@ export function InstrumentDetailClient({
   monthChangePct,
   quarterChangePct,
   yearChangePct,
-  hasHistoricalBars: initialHasHistoricalBars,
   ohlc: initialOhlc,
   allTags,
   transactions,
   transactionHistory,
+  accounts,
   pnlSummary,
   chartType = "candlestick",
 }: {
@@ -68,7 +79,8 @@ export function InstrumentDetailClient({
   ohlc: OhlcData[];
   allTags: string[];
   transactions: TransactionMarker[];
-  transactionHistory: InstrumentTransactionRow[];
+  transactionHistory: EditableTransaction[];
+  accounts: { id: string; name: string; currency: string }[];
   pnlSummary: InstrumentPnlSummary;
   chartType?: "candlestick" | "line";
 }) {
@@ -474,6 +486,13 @@ export function InstrumentDetailClient({
                 />
                 年線 MA250
               </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm bg-[var(--color-muted)]/60"
+                  aria-hidden
+                />
+                成交量
+              </span>
             </div>
             )}
           </CardContent>
@@ -542,9 +561,21 @@ export function InstrumentDetailClient({
             <CardTitle>交易記錄</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <InstrumentTransactionsTable
+            <TransactionsTable
+              columnOrder={INSTRUMENT_TX_COLUMN_ORDER}
+              onColumnOrderChange={() => {}}
               transactions={transactionHistory}
-              currency={instrument.currency ?? "TWD"}
+              accounts={accounts}
+              onSaved={() => {
+                clearClientCache(PAGE_CACHE_KEYS.transactions);
+                clearClientCache(PAGE_CACHE_KEYS.holdings);
+                router.refresh();
+              }}
+              onDeleted={() => {
+                clearClientCache(PAGE_CACHE_KEYS.transactions);
+                clearClientCache(PAGE_CACHE_KEYS.holdings);
+                router.refresh();
+              }}
             />
             <div className="grid gap-4 border-t border-[var(--color-card-border)]/60 pt-4 sm:grid-cols-2">
               <div className="rounded-lg border border-[var(--color-card-border)]/50 bg-[var(--color-card-border)]/10 p-4">

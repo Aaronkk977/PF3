@@ -36,7 +36,7 @@ export function DashboardPageClient() {
   }, [data]);
 
   useEffect(() => {
-    if (pathname === "/") void refresh({ silent: true });
+    if (pathname === "/") void refresh();
   }, [pathname, refresh]);
 
   if (isPending) return <PageSkeleton title="Dashboard" />;

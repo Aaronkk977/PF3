@@ -29,6 +29,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-TW" className={`${notoSansTC.variable} ${exo2.variable}`}>
+      <head>
+        {/* 同步讀取 localStorage 套主題，避免 JS 載入前的主題閃爍（FOUC） */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var s=JSON.parse(localStorage.getItem('portfolio-app-settings')||'{}');var themes=['cyberpunk','monochrome','noir'];var t=themes.includes(s.theme)?s.theme:'cyberpunk';var c=s.colorMode==='red-up'?'red-up':'green-up';document.documentElement.dataset.theme=t;document.documentElement.dataset.colorMode=c;}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className={`${notoSansTC.className} font-sans antialiased`}>
         <AppShell>{children}</AppShell>
       </body>

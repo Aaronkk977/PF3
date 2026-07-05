@@ -100,3 +100,13 @@ git rm --cached .env
 git rm --cached data/import/legacy/All_transactions.csv
 git rm --cached data/import/transactions.csv
 ```
+
+
+# 1. 停掉所有 node 行程（含 server.js、卡住的 build）
+Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. 清掉 build 快取
+Remove-Item -Recurse -Force .next
+
+# 3. 重新 build
+npm run build:app

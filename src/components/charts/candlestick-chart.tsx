@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 import {
   CandlestickSeries,
   ColorType,
+  HistogramSeries,
   LineSeries,
   LineStyle,
   createChart,
@@ -24,6 +25,7 @@ export type OhlcData = {
   high: number;
   low: number;
   close: number;
+  volume?: number;
 };
 
 export type TransactionMarker = {
@@ -93,6 +95,7 @@ export function CandlestickChart({
   const ma20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ma60Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ma250Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const loadingRef = useRef(false);
   // How far back we've already fetched (in years from today)
   const fetchedYearsRef = useRef(1);
@@ -113,6 +116,16 @@ export function CandlestickChart({
     ma20Ref.current?.setData(closingMA(sorted, 20));
     ma60Ref.current?.setData(closingMA(sorted, 60));
     ma250Ref.current?.setData(closingMA(sorted, 250));
+    volumeRef.current?.setData(
+      sorted.map((d) => ({
+        time: d.date as Time,
+        value: d.volume ?? 0,
+        color:
+          d.close >= d.open
+            ? withAlpha(chartTheme.positive, 0.5)
+            : withAlpha(chartTheme.negative, 0.5),
+      })),
+    );
   }
 
   async function fetchOlderData() {
@@ -175,7 +188,7 @@ export function CandlestickChart({
     });
     chartRef.current = chart;
 
-    // ── Candlestick series ─────────────────────────────────────────────
+    // ── Candlestick series（保留下方空間給成交量）─────────────────────
     const candle = chart.addSeries(CandlestickSeries, {
       upColor: chartTheme.positive,
       downColor: chartTheme.negative,
@@ -184,7 +197,22 @@ export function CandlestickChart({
       wickUpColor: chartTheme.positive,
       wickDownColor: chartTheme.negative,
     });
+    candle.priceScale().applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.22 },
+    });
     candleRef.current = candle;
+
+    // ── Volume series（獨立價格軸，疊在下方 22% 區域）───────────────────
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+    volumeRef.current = volumeSeries;
 
     // ── MA series ─────────────────────────────────────────────────────
     const ma10s = chart.addSeries(LineSeries, {
@@ -268,6 +296,7 @@ export function CandlestickChart({
       ma20Ref.current = null;
       ma60Ref.current = null;
       ma250Ref.current = null;
+      volumeRef.current = null;
     };
     // Re-create chart only when theme or initial data/transactions change.
     // Scroll-triggered fetches mutate allDataRef directly via refreshSeries().

@@ -91,23 +91,31 @@ export default async function InstrumentPage({
   });
   const allTags = await prisma.tag.findMany({ orderBy: { name: "asc" } });
 
-  const txRows = await prisma.transaction.findMany({
-    where: { instrumentId: instrument.id },
-    include: { account: true },
-    orderBy: { date: "desc" },
-  });
+  const [txRows, accounts] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { instrumentId: instrument.id },
+      include: { account: true },
+      orderBy: { date: "desc" },
+    }),
+    prisma.account.findMany({
+      select: { id: true, name: true, currency: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
 
   const transactionHistory = txRows.map((t) => ({
     id: t.id,
     date: toTransactionDateKey(t.date),
     type: t.type,
+    accountId: t.account.id,
     accountName: t.account.name,
+    symbol: instrument.symbol,
+    instrumentName: instrument.name,
     quantity: toNumber(t.quantity),
     price: toNumber(t.price),
     fee: toNumber(t.fee),
     tax: toNumber(t.tax),
     note: t.note,
-    currency: t.account.currency,
   }));
 
   const transactionMarkers = txRows.map((t) => ({
@@ -170,6 +178,7 @@ export default async function InstrumentPage({
       allTags={withoutDeprecatedTags(allTags.map((t) => t.name))}
       transactions={transactionMarkers}
       transactionHistory={transactionHistory}
+      accounts={accounts}
       pnlSummary={pnlSummary}
       chartType={isVix ? "line" : "candlestick"}
     />

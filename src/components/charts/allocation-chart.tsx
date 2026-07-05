@@ -114,7 +114,7 @@ export function AllocationChart({
       gradIdx++;
       return fill;
     });
-  }, [ordered, monochrome, chartTheme.cardBorder]);
+  }, [ordered, monochrome]);
 
   const renderSliceLabel = useCallback((props: PieLabelRenderProps) => {
     const {

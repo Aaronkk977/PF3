@@ -29,14 +29,14 @@ type SettingsContextValue = {
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
+  // 伺服器端用預設值（避免 hydration mismatch）；客戶端第一次 effect 後立即同步
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const loaded = loadSettings();
     setSettings(loaded);
+    // inline script 已套主題，這裡確保使用者切換設定後仍能即時更新
     applySettingsToDocument(loaded);
-    setReady(true);
   }, []);
 
   const persist = useCallback((next: AppSettings) => {
@@ -66,10 +66,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     (baseCurrency: string) => updateSettings({ baseCurrency }),
     [updateSettings],
   );
-
-  if (!ready) {
-    return <div className="min-h-screen bg-[var(--color-background)]" />;
-  }
 
   return (
     <SettingsContext.Provider

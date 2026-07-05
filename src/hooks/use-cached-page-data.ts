@@ -14,8 +14,7 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
   dataRef.current = data;
 
   const refresh = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      const silent = opts?.silent ?? dataRef.current != null;
+    async () => {
       setRefreshing(true);
       setError(null);
       try {
@@ -49,7 +48,7 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
     mounted.current = true;
     const cached = readClientCache<T>(cacheKey);
     if (cached) setData(cached);
-    void refresh({ silent: cached != null });
+    void refresh();
     return () => {
       mounted.current = false;
     };

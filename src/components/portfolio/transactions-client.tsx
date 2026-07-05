@@ -237,6 +237,7 @@ export function TransactionsClient({
   const priceTouched = useRef(false);
   const feeTaxTouched = useRef(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchAbort = useRef<AbortController | null>(null);
   const [form, setForm] = useState({
     accountId: initialAccounts[0]?.id ?? "",
     type: "BUY",
@@ -485,6 +486,11 @@ export function TransactionsClient({
 
   const updateSuggestions = useCallback(
     async (query: string) => {
+      // \u53d6\u6d88\u4e0a\u4e00\u6b21\u5c1a\u672a\u5b8c\u6210\u7684\u641c\u5c0b\uff0c\u907f\u514d\u820a\u7d50\u679c\u84cb\u6389\u65b0\u7d50\u679c
+      searchAbort.current?.abort();
+      const controller = new AbortController();
+      searchAbort.current = controller;
+
       const recent = toRecentSuggestions(recentInstruments);
       const local = mergeInstrumentSuggestions(
         priorityInstruments,
@@ -501,26 +507,32 @@ export function TransactionsClient({
         q.length >= 2 || /^\d{3,4}$/.test(q) || /[\u4e00-\u9fff]/.test(q);
       if (!shouldFetch) return;
 
-      const fetchedCatalog = await refreshInstrumentCatalog();
-      const catalog =
-        fetchedCatalog.length > 0 ? fetchedCatalog : instrumentCatalog;
+      try {
+        const fetchedCatalog = await refreshInstrumentCatalog();
+        if (controller.signal.aborted) return;
+        const catalog =
+          fetchedCatalog.length > 0 ? fetchedCatalog : instrumentCatalog;
 
-      const res = await fetch(
-        `/api/instruments/search?q=${encodeURIComponent(q)}`,
-      );
-      const remote: { symbol: string; name: string }[] = res.ok
-        ? await res.json()
-        : [];
-      setSymbolSuggestions(
-        mergeInstrumentSuggestions(
-          priorityInstruments,
-          catalog,
-          remote,
-          query,
-          15,
-          recent,
-        ),
-      );
+        const res = await fetch(
+          `/api/instruments/search?q=${encodeURIComponent(q)}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) return;
+        const remote: { symbol: string; name: string }[] = await res.json();
+        if (controller.signal.aborted) return;
+        setSymbolSuggestions(
+          mergeInstrumentSuggestions(
+            priorityInstruments,
+            catalog,
+            remote,
+            query,
+            15,
+            recent,
+          ),
+        );
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+      }
     },
     [
       instrumentCatalog,
@@ -535,6 +547,9 @@ export function TransactionsClient({
     setResolvedSymbol(null);
     feeTaxTouched.current = false;
     if (searchTimer.current) clearTimeout(searchTimer.current);
+    // 輸入中止尚未發出的舊搜尋
+    searchAbort.current?.abort();
+    searchAbort.current = null;
     searchTimer.current = setTimeout(() => updateSuggestions(query), 200);
   }
 
@@ -590,6 +605,7 @@ export function TransactionsClient({
       clearTimeout(timer);
       controller.abort();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- debounced preview; omit price/qty to avoid refetch on every keystroke
   }, [
     effectiveSymbol,
     form.date,
@@ -676,14 +692,19 @@ export function TransactionsClient({
         alert(err.error ?? "新增失敗");
         return;
       }
+      const created = (await res.json()) as {
+        instrument?: { name?: string | null } | null;
+      };
       if (!isCashFlow && effectiveSymbol) {
         const sym = effectiveSymbol.toUpperCase();
+        const fromServer = created.instrument?.name;
         const fromDb = instrumentCatalog.find(
           (i) => i.symbol.toUpperCase() === sym,
         )?.name;
         const namePart = symbolQuery.split(" — ")[1]?.trim();
         const name = resolveSuggestionDisplayName(
           sym,
+          fromServer,
           fromDb,
           namePart,
           effectiveSymbol,

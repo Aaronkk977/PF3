@@ -3,13 +3,6 @@ import { serializeAccount, reconcileAccountCash } from "@/lib/accounts";
 import { isValidCurrencyCode } from "@/lib/currencies";
 import { prisma } from "@/lib/db";
 import { invalidatePerformanceCache } from "@/lib/performance-cache";
-function parseOptionalInt(v: unknown): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.round(n) : null;
-}
-
 function parseOptionalFloat(v: unknown): number | null | undefined {
   if (v === undefined) return undefined;
   if (v === null || v === "") return null;

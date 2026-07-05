@@ -365,7 +365,7 @@ export async function syncVixHistory(
   const existing = await prisma.priceCache.findMany({
     where: {
       symbol: TAIWAN_VIX_SYMBOL,
-      date: { gte: startOfDay(periodStart), lte: startOfDay(periodEnd) },
+      date: { gte: startOfLocalDay(periodStart), lte: startOfLocalDay(periodEnd) },
     },
     orderBy: { date: "asc" },
   });
@@ -398,7 +398,7 @@ export async function syncVixHistory(
   const rows = await prisma.priceCache.findMany({
     where: {
       symbol: TAIWAN_VIX_SYMBOL,
-      date: { gte: startOfDay(periodStart), lte: startOfDay(periodEnd) },
+      date: { gte: startOfLocalDay(periodStart), lte: startOfLocalDay(periodEnd) },
     },
     orderBy: { date: "asc" },
   });
@@ -939,8 +939,8 @@ function cacheCoversRange(
   periodEnd: Date,
 ): boolean {
   if (cached.length === 0) return false;
-  const startMs = startOfDay(periodStart).getTime();
-  const endMs = startOfDay(periodEnd).getTime();
+  const startMs = startOfLocalDay(periodStart).getTime();
+  const endMs = startOfLocalDay(periodEnd).getTime();
   const firstMs = startOfDay(cached[0].date).getTime();
   const lastMs = startOfDay(cached[cached.length - 1].date).getTime();
   const startSlack = 7 * 24 * 60 * 60 * 1000;
@@ -952,7 +952,7 @@ async function getCachedHistory(symbol: string, start: Date, end: Date) {
   return prisma.priceCache.findMany({
     where: {
       symbol,
-      date: { gte: startOfDay(start), lte: startOfDay(end) },
+      date: { gte: startOfLocalDay(start), lte: startOfLocalDay(end) },
     },
     orderBy: { date: "asc" },
   });
@@ -1003,6 +1003,11 @@ function startOfDay(d: Date): Date {
   const copy = new Date(d);
   copy.setUTCHours(0, 0, 0, 0);
   return copy;
+}
+
+/** 用本地日曆日（而非 UTC）轉成 UTC 午夜，避免凌晨 0:00~08:00 台灣時間跨日偏移 */
+function startOfLocalDay(d: Date): Date {
+  return new Date(toLocalDateKey(d) + "T00:00:00.000Z");
 }
 
 export { inferAssetClass };

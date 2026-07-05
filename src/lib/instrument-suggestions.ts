@@ -33,7 +33,7 @@ function symbolMatchScore(symbol: string, name: string, query: string): number {
   const q = query.trim().toLowerCase();
   if (!q) return 0;
   const sym = symbol.toLowerCase();
-  const base = sym.replace(/\.tw$/i, "");
+  const base = sym.replace(/\.(tw|two)$/i, "");
   const nm = name.toLowerCase();
   const normalized = normalizeSymbolInput(query).toLowerCase();
 
@@ -61,7 +61,7 @@ export function mergeInstrumentSuggestions(
     if (!q) return true;
     const sym = symbol.toLowerCase();
     const nm = name.toLowerCase();
-    const base = sym.replace(/\.tw$/i, "");
+    const base = sym.replace(/\.(tw|two)$/i, "");
     const normalized = normalizeSymbolInput(query).toLowerCase();
     return (
       sym.includes(q) ||
