@@ -52,8 +52,12 @@ model Watchlist {
 model WatchlistItem {
   id          String    @id @default(cuid())
   watchlistId String
-  symbol      String
+  /** 分隔線／小標項目 symbol 為 null（SQLite 唯一索引允許多筆 null） */
+  symbol      String?
   name        String?
+  /** SYMBOL（預設）｜ SEPARATOR（分隔線／小標，label 顯示文字） */
+  kind        String    @default("SYMBOL")
+  label       String?
   sortOrder   Int       @default(0)
   createdAt   DateTime  @default(now())
   watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)

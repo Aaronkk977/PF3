@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { searchInstruments } from "@/lib/instrument-search";
 import { normalizeSymbolInput } from "@/lib/instrument-symbol";
+import { fetchWithShortTimeout } from "@/lib/http-fetch";
 import { getQuote } from "@/lib/yahoo";
 
 export function hasCjk(text: string): boolean {
@@ -18,68 +19,67 @@ export function isTaiwanSymbol(symbol: string): boolean {
   return s.endsWith(".TW") || s.endsWith(".TWO");
 }
 
-type YahooSearchQuote = {
-  symbol?: string;
-  shortname?: string;
-  longname?: string;
-  exchange?: string;
-};
-
-async function yahooSearchQuotes(
-  query: string,
-  lang?: string,
-): Promise<YahooSearchQuote[]> {
-  const langParam = lang ? `&lang=${encodeURIComponent(lang)}` : "";
-  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=12&newsCount=0${langParam}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6_000);
+/** 上市（TWSE）代碼／中文名查詢——與交易所官網搜尋列同源 */
+async function twseCodeQuery(code: string): Promise<string | null> {
+  const res = await fetchWithShortTimeout(
+    `https://www.twse.com.tw/rwd/zh/api/codeQuery?query=${encodeURIComponent(code)}`,
+    { next: { revalidate: 86400 } },
+    6_000,
+  );
+  if (!res?.ok) return null;
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
-      },
-      next: { revalidate: 86400 },
-      signal: controller.signal,
-    });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { quotes?: YahooSearchQuote[] };
-    return data.quotes ?? [];
+    const data = (await res.json()) as { suggestions?: string[] };
+    for (const s of data.suggestions ?? []) {
+      const [c, name] = s.split("\t");
+      if (c === code && name) return name.trim();
+    }
   } catch {
-    return [];
-  } finally {
-    clearTimeout(timer);
+    // ignore parse errors
   }
+  return null;
 }
 
-function symbolMatchesQuote(target: string, quote: YahooSearchQuote): boolean {
-  const sym = (quote.symbol ?? "").toUpperCase();
-  const t = target.toUpperCase();
-  const code = t.replace(/\.(TW|TWO)$/i, "");
-  return sym === t || sym === `${code}.TW` || sym === `${code}.TWO` || sym === code;
+/** 上櫃（TPEx）代碼／中文名查詢——與交易所官網搜尋列同源 */
+async function tpexCodeQuery(code: string): Promise<string | null> {
+  const res = await fetchWithShortTimeout(
+    `https://www.tpex.org.tw/www/zh-tw/api/codeQuery?query=${encodeURIComponent(code)}`,
+    { next: { revalidate: 86400 } },
+    6_000,
+  );
+  if (!res?.ok) return null;
+  try {
+    const data = (await res.json()) as {
+      suggestions?: { type?: string; data?: string[] }[];
+    };
+    for (const group of data.suggestions ?? []) {
+      for (const entry of group.data ?? []) {
+        const [label, c] = entry.split("\t");
+        if (c !== code || !label) continue;
+        return label.startsWith(code)
+          ? label.slice(code.length).trim()
+          : label.trim();
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return null;
 }
 
-/** 台股中文名稱（Yahoo 搜尋 zh-TW） */
+/**
+ * 台股中文名稱：改用 TWSE／TPEx 官方代碼查詢 API（與交易所官網搜尋列同源）。
+ * Yahoo 的 finance/search 已不再依 lang 參數回傳中文名，故不再採用。
+ */
 export async function fetchTaiwanChineseName(
   symbol: string,
 ): Promise<string | null> {
   const sym = symbol.toUpperCase();
   const code = sym.replace(/\.(TW|TWO)$/i, "");
-  const queries = [sym, code, `${code}.TW`];
 
-  for (const lang of ["zh-Hant-TW", "zh-TW", undefined]) {
-    for (const q of queries) {
-      const quotes = await yahooSearchQuotes(q, lang);
-      for (const item of quotes) {
-        if (!symbolMatchesQuote(sym, item)) continue;
-        const name = (item.shortname ?? item.longname ?? "").trim();
-        if (name && hasCjk(name)) return name;
-      }
-    }
+  if (sym.endsWith(".TWO")) {
+    return (await tpexCodeQuery(code)) ?? (await twseCodeQuery(code));
   }
-
-  return null;
+  return (await twseCodeQuery(code)) ?? (await tpexCodeQuery(code));
 }
 
 /** 台股優先中文名、美股優先英文名 */

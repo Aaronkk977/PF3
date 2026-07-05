@@ -24,7 +24,7 @@ import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { isBuiltinWatchlistName } from "@/lib/watchlist-presets";
 import { WatchlistItemsList } from "@/components/portfolio/watchlist-items-list";
 import { ScreenerPanel } from "@/components/portfolio/screener-panel";
-import type { WatchlistWithEntries } from "@/lib/watchlist";
+import type { WatchlistEntry, WatchlistWithEntries } from "@/lib/watchlist";
 import {
   PAGE_CACHE_KEYS,
   patchClientCache,
@@ -83,6 +83,8 @@ export function DashboardClient({
   const [newListName, setNewListName] = useState("");
   const [loading, setLoading] = useState(false);
   const [showNewList, setShowNewList] = useState(false);
+  const [draggingListId, setDraggingListId] = useState<string | null>(null);
+  const [listDropTargetId, setListDropTargetId] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSuggestions = useCallback(
@@ -170,6 +172,37 @@ export function DashboardClient({
     router.refresh();
   }
 
+  async function persistListOrder(listIds: string[]) {
+    const res = await fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reorderLists", listIds }),
+    });
+    if (!res.ok) {
+      const err = (await res.json()) as { error?: string };
+      alert(err.error ?? "排序儲存失敗");
+    }
+  }
+
+  function handleListDrop(targetId: string) {
+    if (!draggingListId || draggingListId === targetId) {
+      setDraggingListId(null);
+      setListDropTargetId(null);
+      return;
+    }
+    const from = lists.findIndex((l) => l.id === draggingListId);
+    const to = lists.findIndex((l) => l.id === targetId);
+    setDraggingListId(null);
+    setListDropTargetId(null);
+    if (from < 0 || to < 0) return;
+    const next = [...lists];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved!);
+    setLists(next);
+    persistWatchlistsToCache(next);
+    void persistListOrder(next.map((l) => l.id));
+  }
+
   async function addWatchlistItem(e: React.FormEvent) {
     e.preventDefault();
     if (!effectiveSymbol || !activeList) return;
@@ -225,16 +258,78 @@ export function DashboardClient({
     }
   }
 
-  async function removeWatchlistItem(symbol: string) {
+  async function removeWatchlistItem(item: WatchlistEntry) {
     if (!activeList) return;
-    await fetch(
-      `/api/watchlist?listId=${encodeURIComponent(activeList.id)}&symbol=${encodeURIComponent(symbol)}`,
-      { method: "DELETE" },
-    );
+    if (item.kind === "SYMBOL") {
+      await fetch(
+        `/api/watchlist?listId=${encodeURIComponent(activeList.id)}&symbol=${encodeURIComponent(item.symbol)}`,
+        { method: "DELETE" },
+      );
+    } else {
+      await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "removeItem", itemId: item.id }),
+      });
+    }
     setLists((prev) => {
       const next = prev.map((l) =>
         l.id === activeList.id
-          ? { ...l, items: l.items.filter((i) => i.symbol !== symbol) }
+          ? { ...l, items: l.items.filter((i) => i.id !== item.id) }
+          : l,
+      );
+      persistWatchlistsToCache(next);
+      return next;
+    });
+  }
+
+  async function addWatchlistSeparator() {
+    if (!activeList) return;
+    const label = prompt("輸入標題文字")?.trim();
+    if (!label) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "addSeparator",
+          listId: activeList.id,
+          label,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        alert(err.error ?? "新增失敗");
+        return;
+      }
+      await refreshLists(activeList.id);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function renameWatchlistSeparator(itemId: string, label: string) {
+    if (!activeList) return;
+    const res = await fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateSeparator", itemId, label }),
+    });
+    if (!res.ok) {
+      const err = (await res.json()) as { error?: string };
+      alert(err.error ?? "更新失敗");
+      return;
+    }
+    setLists((prev) => {
+      const next = prev.map((l) =>
+        l.id === activeList.id
+          ? {
+              ...l,
+              items: l.items.map((i) =>
+                i.id === itemId && i.kind === "SEPARATOR" ? { ...i, label } : i,
+              ),
+            }
           : l,
       );
       persistWatchlistsToCache(next);
@@ -419,15 +514,45 @@ export function DashboardClient({
                   <button
                     key={list.id}
                     type="button"
+                    draggable
                     onClick={() => setActiveListId(list.id)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", list.id);
+                      setDraggingListId(list.id);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (draggingListId && draggingListId !== list.id) {
+                        setListDropTargetId(list.id);
+                      }
+                    }}
+                    onDragLeave={() =>
+                      setListDropTargetId((id) => (id === list.id ? null : id))
+                    }
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleListDrop(list.id);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingListId(null);
+                      setListDropTargetId(null);
+                    }}
+                    className={`cursor-grab rounded-full px-3 py-1 text-xs font-medium transition-colors active:cursor-grabbing ${
                       list.id === activeList?.id
                         ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] ring-1 ring-[var(--color-primary)]/40"
                         : "bg-[var(--color-card-border)]/30 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                    } ${draggingListId === list.id ? "opacity-50" : ""} ${
+                      listDropTargetId === list.id && draggingListId !== list.id
+                        ? "ring-1 ring-[var(--color-primary)]/50"
+                        : ""
                     }`}
                   >
                     {list.name}
-                    <span className="ml-1 opacity-60">({list.items.length})</span>
+                    <span className="ml-1 opacity-60">
+                      ({list.items.filter((i) => i.kind === "SYMBOL").length})
+                    </span>
                   </button>
                 ))}
               </div>
@@ -501,6 +626,15 @@ export function DashboardClient({
                     </form>
 
                     <div className="flex flex-wrap gap-2 border-t border-[var(--color-card-border)]/40 pt-3">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={loading}
+                        onClick={() => void addWatchlistSeparator()}
+                      >
+                        新增標題
+                      </Button>
                       {!isBuiltinList && (
                         <Button
                           type="button"
@@ -548,6 +682,7 @@ export function DashboardClient({
                         })
                       }
                       onRemove={removeWatchlistItem}
+                      onRenameSeparator={renameWatchlistSeparator}
                     />
                   </>
                 )}

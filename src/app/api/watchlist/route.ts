@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   addToWatchlist,
+  addWatchlistSeparator,
   clearWatchlist,
   createWatchlist,
   deleteWatchlist,
   getWatchlists,
   removeFromWatchlist,
+  removeWatchlistItemById,
   renameWatchlist,
   reorderWatchlistItems,
+  reorderWatchlists,
+  updateWatchlistSeparator,
 } from "@/lib/watchlist";
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { canAddSymbolToWatchlist } from "@/lib/yahoo";
@@ -81,6 +85,70 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "排序失敗";
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
+  }
+
+  if (action === "reorderLists") {
+    const listIds = body.listIds as string[] | undefined;
+    if (!listIds?.length) {
+      return NextResponse.json({ error: "listIds 必填" }, { status: 400 });
+    }
+    try {
+      await reorderWatchlists(listIds);
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "排序失敗";
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
+  }
+
+  if (action === "addSeparator") {
+    const listId = body.listId as string | undefined;
+    const label = (body.label as string)?.trim();
+    if (!listId || !label) {
+      return NextResponse.json(
+        { error: "listId 與 label 必填" },
+        { status: 400 },
+      );
+    }
+    try {
+      const item = await addWatchlistSeparator(listId, label);
+      return NextResponse.json(item, { status: 201 });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "新增失敗";
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
+  }
+
+  if (action === "updateSeparator") {
+    const itemId = body.itemId as string | undefined;
+    const label = (body.label as string)?.trim();
+    if (!itemId || !label) {
+      return NextResponse.json(
+        { error: "itemId 與 label 必填" },
+        { status: 400 },
+      );
+    }
+    try {
+      const item = await updateWatchlistSeparator(itemId, label);
+      return NextResponse.json(item);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "更新失敗";
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
+  }
+
+  if (action === "removeItem") {
+    const itemId = body.itemId as string | undefined;
+    if (!itemId) {
+      return NextResponse.json({ error: "itemId 必填" }, { status: 400 });
+    }
+    try {
+      await removeWatchlistItemById(itemId);
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "刪除失敗";
       return NextResponse.json({ error: msg }, { status: 400 });
     }
   }

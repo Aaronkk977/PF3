@@ -1,0 +1,36 @@
+name: Release desktop app
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js standalone bundle
+        run: npm run build:app
+
+      - name: Install isolated Prisma CLI bundle
+        run: npm run prisma-cli-bundle:install
+
+      - name: Build and publish Electron installer
+        run: npx electron-builder --win -c electron-builder.config.cjs --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

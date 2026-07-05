@@ -28,7 +28,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-TW" className={`${notoSansTC.variable} ${exo2.variable}`}>
+    <html
+      lang="zh-TW"
+      className={`${notoSansTC.variable} ${exo2.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         {/* 同步讀取 localStorage 套主題，避免 JS 載入前的主題閃爍（FOUC） */}
         <script

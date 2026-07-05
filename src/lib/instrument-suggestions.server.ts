@@ -10,6 +10,7 @@ export async function buildPriorityInstrumentSuggestions(
   const [holdings, watchlistItems, recentTxs] = await Promise.all([
     existingHoldings ?? getHoldings(),
     prisma.watchlistItem.findMany({
+      where: { symbol: { not: null } },
       select: { symbol: true, name: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     }),
@@ -43,6 +44,7 @@ export async function buildPriorityInstrumentSuggestions(
     if (h.quantity > 0) push(h.symbol, h.name, 0);
   }
   for (const w of watchlistItems) {
+    if (!w.symbol) continue;
     push(w.symbol, w.name, 1);
   }
 

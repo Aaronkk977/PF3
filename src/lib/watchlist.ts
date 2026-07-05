@@ -8,16 +8,23 @@ import { ensureInstrument } from "@/lib/ensure-instrument";
 import { resolveInstrumentDisplayName } from "@/lib/instrument-display-name";
 import { getQuotes, getWeekChangePercents, type QuoteResult } from "@/lib/yahoo";
 
-export type WatchlistEntry = {
-  id: string;
-  symbol: string;
-  name: string | null;
-  price: number;
-  change: number;
-  changePercent: number | null;
-  previousClose?: number;
-  weekChangePercent: number | null;
-};
+export type WatchlistEntry =
+  | {
+      id: string;
+      kind: "SYMBOL";
+      symbol: string;
+      name: string | null;
+      price: number;
+      change: number;
+      changePercent: number | null;
+      previousClose?: number;
+      weekChangePercent: number | null;
+    }
+  | {
+      id: string;
+      kind: "SEPARATOR";
+      label: string;
+    };
 
 export type WatchlistWithEntries = {
   id: string;
@@ -34,10 +41,11 @@ export async function ensureWatchlistPresets(): Promise<void> {
 
   for (let p = 0; p < presets.length; p++) {
     const preset = presets[p]!;
+    // update 留空：清單已存在時不覆寫 sortOrder，避免蓋掉使用者拖曳排序的結果
     const list = await prisma.watchlist.upsert({
       where: { name: preset.name },
       create: { name: preset.name, sortOrder: p },
-      update: { sortOrder: p },
+      update: {},
     });
 
     for (let i = 0; i < preset.items.length; i++) {
@@ -72,7 +80,11 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
   });
 
   const allSymbols = [
-    ...new Set(lists.flatMap((l) => l.items.map((i) => i.symbol))),
+    ...new Set(
+      lists.flatMap((l) =>
+        l.items.filter((i) => i.kind !== "SEPARATOR" && i.symbol).map((i) => i.symbol!),
+      ),
+    ),
   ];
   const [quotes, weekChanges] = await Promise.all([
     allSymbols.length > 0 ? getQuotes(allSymbols) : Promise.resolve(new Map<string, QuoteResult>()),
@@ -94,30 +106,35 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
       id: list.id,
       name: list.name,
       items: await Promise.all(
-        list.items.map(async (item) => {
-          const quote = quotes.get(item.symbol);
-          const displayName = await resolveInstrumentDisplayName(item.symbol, [
+        list.items.map(async (item): Promise<WatchlistEntry> => {
+          if (item.kind === "SEPARATOR" || !item.symbol) {
+            return { id: item.id, kind: "SEPARATOR", label: item.label ?? "" };
+          }
+          const symbol = item.symbol;
+          const quote = quotes.get(symbol);
+          const displayName = await resolveInstrumentDisplayName(symbol, [
             item.name,
-            instrumentNames.get(item.symbol.toUpperCase()),
+            instrumentNames.get(symbol.toUpperCase()),
             quote?.name,
           ]);
           if (
             displayName &&
-            displayName !== item.symbol &&
+            displayName !== symbol &&
             displayName !== item.name
           ) {
             nameUpdates.push({ id: item.id, name: displayName });
           }
           return {
             id: item.id,
-            symbol: item.symbol,
+            kind: "SYMBOL",
+            symbol,
             name: displayName,
             price: quote?.price ?? 0,
             change: quote?.change ?? 0,
             changePercent: quote?.changePercent ?? null,
             previousClose: quote?.previousClose,
             weekChangePercent:
-              weekChanges.get(item.symbol.toUpperCase()) ?? null,
+              weekChanges.get(symbol.toUpperCase()) ?? null,
           };
         }),
       ),
@@ -229,6 +246,49 @@ export async function removeFromWatchlist(listId: string, symbol: string) {
   });
 }
 
+/** 新增分隔線／小標項目（無代號，symbol 為 null） */
+export async function addWatchlistSeparator(listId: string, label: string) {
+  const list = await prisma.watchlist.findUnique({ where: { id: listId } });
+  if (!list) throw new Error("找不到清單");
+
+  const trimmed = label.trim();
+  if (!trimmed) throw new Error("標題文字必填");
+
+  const maxOrder = await prisma.watchlistItem.aggregate({
+    where: { watchlistId: listId },
+    _max: { sortOrder: true },
+  });
+
+  return prisma.watchlistItem.create({
+    data: {
+      watchlistId: listId,
+      symbol: null,
+      kind: "SEPARATOR",
+      label: trimmed,
+      sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
+    },
+  });
+}
+
+/** 編輯分隔線／小標文字 */
+export async function updateWatchlistSeparator(itemId: string, label: string) {
+  const trimmed = label.trim();
+  if (!trimmed) throw new Error("標題文字必填");
+
+  const item = await prisma.watchlistItem.findUnique({ where: { id: itemId } });
+  if (!item || item.kind !== "SEPARATOR") throw new Error("找不到分隔線項目");
+
+  return prisma.watchlistItem.update({
+    where: { id: itemId },
+    data: { label: trimmed },
+  });
+}
+
+/** 依 id 移除項目（用於分隔線；一般標的也可用此代替 removeFromWatchlist） */
+export async function removeWatchlistItemById(itemId: string) {
+  return prisma.watchlistItem.delete({ where: { id: itemId } });
+}
+
 export async function reorderWatchlistItems(
   listId: string,
   itemIds: string[],
@@ -256,6 +316,32 @@ export async function reorderWatchlistItems(
   await prisma.$transaction(
     itemIds.map((id, sortOrder) =>
       prisma.watchlistItem.update({
+        where: { id },
+        data: { sortOrder },
+      }),
+    ),
+  );
+}
+
+/** 重新排序追蹤清單本身（清單與清單間的順序） */
+export async function reorderWatchlists(listIds: string[]): Promise<void> {
+  const uniqueIds = [...new Set(listIds)];
+  if (uniqueIds.length !== listIds.length) {
+    throw new Error("排序項目重複");
+  }
+
+  const existing = await prisma.watchlist.findMany({ select: { id: true } });
+  if (existing.length !== listIds.length) {
+    throw new Error("排序項目數量不符");
+  }
+  const existingSet = new Set(existing.map((l) => l.id));
+  if (!listIds.every((id) => existingSet.has(id))) {
+    throw new Error("排序項目無效");
+  }
+
+  await prisma.$transaction(
+    listIds.map((id, sortOrder) =>
+      prisma.watchlist.update({
         where: { id },
         data: { sortOrder },
       }),

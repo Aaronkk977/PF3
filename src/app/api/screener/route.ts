@@ -35,11 +35,11 @@ export async function GET(req: NextRequest) {
   let watchlistSymbols: Set<string> | null = null;
   if (watchlistOnly) {
     const items = await prisma.watchlistItem.findMany({
-      where: watchlistId ? { watchlistId } : undefined,
+      where: watchlistId ? { watchlistId, symbol: { not: null } } : { symbol: { not: null } },
       select: { symbol: true },
     });
     watchlistSymbols = new Set(
-      items.map((i: { symbol: string }) => i.symbol.replace(/\.(TW|TWO)$/, "")),
+      items.map((i) => i.symbol!.replace(/\.(TW|TWO)$/, "")),
     );
   }
 
@@ -129,11 +129,12 @@ export async function GET(req: NextRequest) {
 
   // ── 所有追蹤清單標記 ──────────────────────────────────────────────────────
   const allWatchlistItems = await prisma.watchlistItem.findMany({
+    where: { symbol: { not: null } },
     select: { symbol: true },
   });
   const allWatchlistSymbols = new Set(
-    allWatchlistItems.map((i: { symbol: string }) =>
-      i.symbol.replace(/\.(TW|TWO)$/, ""),
+    allWatchlistItems.map((i) =>
+      i.symbol!.replace(/\.(TW|TWO)$/, ""),
     ),
   );
 

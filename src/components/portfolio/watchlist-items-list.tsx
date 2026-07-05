@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { X } from "lucide-react";
+import { GripVertical, Pencil, X } from "lucide-react";
 import { useCallback, useState, type DragEvent } from "react";
 import { instrumentHref } from "@/lib/instrument-nav";
 import { isTaiwanLimitUp } from "@/lib/market-utils";
 import type { WatchlistEntry } from "@/lib/watchlist";
+import { Input } from "@/components/ui/input";
 import {
   changeToneClass,
   formatCurrency,
@@ -29,22 +30,104 @@ function reorderById<T extends { id: string }>(
 }
 
 function isInteractiveDragTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && !!target.closest("a, button");
+  return target instanceof HTMLElement && !!target.closest("a, button, input");
 }
 
 const WATCHLIST_ROW_GRID =
   "grid grid-cols-[minmax(0,1fr)_5.5rem_4.25rem_4.25rem_1.75rem] items-center gap-x-3 sm:gap-x-4";
+
+function SeparatorRow({
+  item,
+  dragging,
+  dropTarget,
+  dragHandleProps,
+  onRename,
+  onRemove,
+}: {
+  item: Extract<WatchlistEntry, { kind: "SEPARATOR" }>;
+  dragging: boolean;
+  dropTarget: boolean;
+  dragHandleProps: React.HTMLAttributes<HTMLDivElement>;
+  onRename: (label: string) => void;
+  onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.label);
+
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== item.label) onRename(trimmed);
+    else setDraft(item.label);
+  }
+
+  return (
+    <div
+      {...dragHandleProps}
+      className={`flex items-center gap-2 rounded-md px-1 py-1.5 transition-[opacity,box-shadow] cursor-grab active:cursor-grabbing ${
+        dragging ? "opacity-50" : ""
+      } ${dropTarget ? "ring-1 ring-[var(--color-primary)]/50" : ""}`}
+    >
+      <GripVertical
+        className="h-3.5 w-3.5 shrink-0 text-[var(--color-muted)]/50"
+        aria-hidden
+      />
+      {editing ? (
+        <Input
+          autoFocus
+          className="h-7 flex-1 text-xs"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            }
+            if (e.key === "Escape") {
+              setDraft(item.label);
+              setEditing(false);
+            }
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="group flex flex-1 items-center gap-1.5 truncate text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+        >
+          <span className="truncate">{item.label}</span>
+          <Pencil
+            className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-60"
+            aria-hidden
+          />
+        </button>
+      )}
+      <span className="h-px flex-1 bg-[var(--color-card-border)]/60" aria-hidden />
+      <button
+        type="button"
+        onClick={onRemove}
+        className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-card-border)]/60 hover:text-[var(--color-negative)]"
+        aria-label={`移除標題「${item.label}」`}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
 
 export function WatchlistItemsList({
   listId,
   items,
   onItemsChange,
   onRemove,
+  onRenameSeparator,
 }: {
   listId: string;
   items: WatchlistEntry[];
   onItemsChange: (items: WatchlistEntry[]) => void;
-  onRemove: (symbol: string) => void;
+  onRemove: (item: WatchlistEntry) => void;
+  onRenameSeparator: (itemId: string, label: string) => void;
 }) {
   const pathname = usePathname();
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -104,6 +187,53 @@ export function WatchlistItemsList({
         <div />
       </div>
       {items.map((item) => {
+        const dragging = draggingId === item.id;
+        const dropTarget = dropTargetId === item.id && draggingId !== item.id;
+        const dragHandleProps = {
+          draggable: true,
+          onDragStart: (e: DragEvent<HTMLDivElement>) => {
+            if (isInteractiveDragTarget(e.target)) {
+              e.preventDefault();
+              return;
+            }
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", item.id);
+            setDraggingId(item.id);
+          },
+          onDragOver: (e: DragEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (draggingId && draggingId !== item.id) {
+              setDropTargetId(item.id);
+            }
+          },
+          onDragLeave: () => {
+            setDropTargetId((id) => (id === item.id ? null : id));
+          },
+          onDrop: (e: DragEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            handleDrop(item.id);
+          },
+          onDragEnd: () => {
+            setDraggingId(null);
+            setDropTargetId(null);
+          },
+        };
+
+        if (item.kind === "SEPARATOR") {
+          return (
+            <SeparatorRow
+              key={item.id}
+              item={item}
+              dragging={dragging}
+              dropTarget={dropTarget}
+              dragHandleProps={dragHandleProps}
+              onRename={(label) => onRenameSeparator(item.id, label)}
+              onRemove={() => onRemove(item)}
+            />
+          );
+        }
+
         const limitUp = isTaiwanLimitUp(item.symbol, item.changePercent, {
           price: item.price,
           prevClose:
@@ -112,40 +242,11 @@ export function WatchlistItemsList({
               ? item.price - item.change
               : null),
         });
-        const dragging = draggingId === item.id;
-        const dropTarget = dropTargetId === item.id && draggingId !== item.id;
 
         return (
           <div
             key={item.id}
-            draggable
-            onDragStart={(e: DragEvent<HTMLDivElement>) => {
-              if (isInteractiveDragTarget(e.target)) {
-                e.preventDefault();
-                return;
-              }
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", item.id);
-              setDraggingId(item.id);
-            }}
-            onDragOver={(e: DragEvent<HTMLDivElement>) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              if (draggingId && draggingId !== item.id) {
-                setDropTargetId(item.id);
-              }
-            }}
-            onDragLeave={() => {
-              setDropTargetId((id) => (id === item.id ? null : id));
-            }}
-            onDrop={(e: DragEvent<HTMLDivElement>) => {
-              e.preventDefault();
-              handleDrop(item.id);
-            }}
-            onDragEnd={() => {
-              setDraggingId(null);
-              setDropTargetId(null);
-            }}
+            {...dragHandleProps}
             className={`${WATCHLIST_ROW_GRID} rounded-lg border px-3 py-2.5 transition-[opacity,box-shadow,border-color] cursor-grab active:cursor-grabbing ${
               limitUp
                 ? "tw-limit-up border-[var(--color-card-border)]/50"
@@ -191,7 +292,7 @@ export function WatchlistItemsList({
             </span>
             <button
               type="button"
-              onClick={() => onRemove(item.symbol)}
+              onClick={() => onRemove(item)}
               className="justify-self-end rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-card-border)]/60 hover:text-[var(--color-negative)]"
               aria-label={`移除 ${item.symbol}`}
             >
