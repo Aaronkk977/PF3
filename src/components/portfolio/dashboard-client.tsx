@@ -24,6 +24,12 @@ import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { isBuiltinWatchlistName } from "@/lib/watchlist-presets";
 import { WatchlistItemsList } from "@/components/portfolio/watchlist-items-list";
 import { ScreenerPanel } from "@/components/portfolio/screener-panel";
+import {
+  ContextMenu,
+  useContextMenu,
+  type ContextMenuItem,
+} from "@/components/ui/context-menu";
+import { Plus } from "lucide-react";
 import type { WatchlistEntry, WatchlistWithEntries } from "@/lib/watchlist";
 import {
   PAGE_CACHE_KEYS,
@@ -43,6 +49,9 @@ async function fetchWatchlists(): Promise<WatchlistWithEntries[]> {
 }
 
 type Instrument = { id: string; symbol: string; name: string | null };
+
+/** 新增清單橢圓輸入框的最小寬度（約等於「+」圓鈕 pill 的觀感起點） */
+const NEW_LIST_MIN_WIDTH = 88;
 
 export function DashboardClient({
   summary,
@@ -82,9 +91,18 @@ export function DashboardClient({
   );
   const [newListName, setNewListName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
   const [showNewList, setShowNewList] = useState(false);
+  const [newListInputWidth, setNewListInputWidth] = useState(0);
+  const newListMeasureRef = useRef<HTMLSpanElement>(null);
+  const newListInputRef = useRef<HTMLInputElement>(null);
   const [draggingListId, setDraggingListId] = useState<string | null>(null);
-  const [listDropTargetId, setListDropTargetId] = useState<string | null>(null);
+  const [listMenuTargetId, setListMenuTargetId] = useState<string | null>(null);
+  const [itemsMenuTarget, setItemsMenuTarget] = useState<WatchlistEntry | null>(
+    null,
+  );
+  const listMenu = useContextMenu();
+  const itemsAreaMenu = useContextMenu();
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSuggestions = useCallback(
@@ -145,9 +163,6 @@ export function DashboardClient({
     [lists, activeListId],
   );
 
-  const isBuiltinList =
-    activeList != null && isBuiltinWatchlistName(activeList.name);
-
   useEffect(() => {
     setWatchlistPrefsReady(true);
   }, []);
@@ -156,6 +171,13 @@ export function DashboardClient({
     if (!watchlistPrefsReady || !activeListId) return;
     saveDashboardPrefs({ activeWatchlistId: activeListId });
   }, [activeListId, watchlistPrefsReady]);
+
+  // 新增清單的橢圓輸入框：依文字內容量測寬度，讓輸入框像跟著文字長度伸縮
+  useEffect(() => {
+    if (!showNewList) return;
+    const measured = newListMeasureRef.current?.offsetWidth ?? 0;
+    setNewListInputWidth(Math.max(NEW_LIST_MIN_WIDTH, measured + 28));
+  }, [showNewList, newListName]);
 
   function persistWatchlistsToCache(next: WatchlistWithEntries[]) {
     patchClientCache(PAGE_CACHE_KEYS.dashboard, { watchlists: next });
@@ -184,29 +206,28 @@ export function DashboardClient({
     }
   }
 
-  function handleListDrop(targetId: string) {
-    if (!draggingListId || draggingListId === targetId) {
-      setDraggingListId(null);
-      setListDropTargetId(null);
-      return;
-    }
+  function handleListDragOver(targetId: string) {
+    if (!draggingListId || draggingListId === targetId) return;
     const from = lists.findIndex((l) => l.id === draggingListId);
     const to = lists.findIndex((l) => l.id === targetId);
-    setDraggingListId(null);
-    setListDropTargetId(null);
-    if (from < 0 || to < 0) return;
+    if (from < 0 || to < 0 || from === to) return;
     const next = [...lists];
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved!);
     setLists(next);
-    persistWatchlistsToCache(next);
-    void persistListOrder(next.map((l) => l.id));
+  }
+
+  function handleListDragEnd() {
+    setDraggingListId(null);
+    persistWatchlistsToCache(lists);
+    void persistListOrder(lists.map((l) => l.id));
   }
 
   async function addWatchlistItem(e: React.FormEvent) {
     e.preventDefault();
     if (!effectiveSymbol || !activeList) return;
     setLoading(true);
+    setAddingItem(true);
     try {
       const res = await fetch("/api/watchlist", {
         method: "POST",
@@ -231,12 +252,26 @@ export function DashboardClient({
       }
     } finally {
       setLoading(false);
+      setAddingItem(false);
     }
   }
 
-  async function createList(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newListName.trim()) return;
+  function startNewList() {
+    setNewListName("");
+    setShowNewList(true);
+  }
+
+  function cancelNewList() {
+    setShowNewList(false);
+    setNewListName("");
+  }
+
+  async function commitNewList() {
+    const name = newListName.trim();
+    if (!name) {
+      cancelNewList();
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch("/api/watchlist", {
@@ -244,7 +279,7 @@ export function DashboardClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "createList",
-          name: newListName.trim(),
+          name,
         }),
       });
       if (res.ok) {
@@ -283,10 +318,10 @@ export function DashboardClient({
     });
   }
 
-  async function addWatchlistSeparator() {
+  async function addWatchlistSeparator(afterItemId?: string | null) {
     if (!activeList) return;
-    const label = prompt("輸入標題文字")?.trim();
-    if (!label) return;
+    const label = prompt("輸入標題文字", "小標題");
+    if (label == null) return;
     setLoading(true);
     try {
       const res = await fetch("/api/watchlist", {
@@ -295,7 +330,8 @@ export function DashboardClient({
         body: JSON.stringify({
           action: "addSeparator",
           listId: activeList.id,
-          label,
+          label: label.trim(),
+          afterItemId: afterItemId ?? undefined,
         }),
       });
       if (!res.ok) {
@@ -337,10 +373,10 @@ export function DashboardClient({
     });
   }
 
-  async function renameActiveList() {
-    if (!activeList || isBuiltinList) return;
-    const name = prompt("重新命名清單", activeList.name)?.trim();
-    if (!name || name === activeList.name) return;
+  async function renameList(list: WatchlistWithEntries) {
+    if (isBuiltinWatchlistName(list.name)) return;
+    const name = prompt("重新命名清單", list.name)?.trim();
+    if (!name || name === list.name) return;
     setLoading(true);
     try {
       const res = await fetch("/api/watchlist", {
@@ -348,7 +384,7 @@ export function DashboardClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "renameList",
-          listId: activeList.id,
+          listId: list.id,
           name,
         }),
       });
@@ -357,40 +393,39 @@ export function DashboardClient({
         alert(err.error ?? "重新命名失敗");
         return;
       }
-      await refreshLists(activeList.id);
+      await refreshLists(list.id);
     } finally {
       setLoading(false);
     }
   }
 
-  async function clearActiveList() {
-    if (!activeList) return;
-    if (!confirm(`確定清空「${activeList.name}」的所有標的？`)) return;
+  async function clearList(list: WatchlistWithEntries) {
+    if (!confirm(`確定清空「${list.name}」的所有標的？`)) return;
     setLoading(true);
     try {
       const res = await fetch("/api/watchlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "clearList", listId: activeList.id }),
+        body: JSON.stringify({ action: "clearList", listId: list.id }),
       });
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };
         alert(err.error ?? "清空失敗");
         return;
       }
-      await refreshLists(activeList.id);
+      await refreshLists(list.id);
     } finally {
       setLoading(false);
     }
   }
 
-  async function deleteActiveList() {
-    if (!activeList || isBuiltinList) return;
-    if (!confirm(`確定刪除清單「${activeList.name}」？此操作無法復原。`)) return;
+  async function deleteList(list: WatchlistWithEntries) {
+    if (isBuiltinWatchlistName(list.name)) return;
+    if (!confirm(`確定刪除清單「${list.name}」？此操作無法復原。`)) return;
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/watchlist?list=1&listId=${encodeURIComponent(activeList.id)}`,
+        `/api/watchlist?list=1&listId=${encodeURIComponent(list.id)}`,
         { method: "DELETE" },
       );
       if (!res.ok) {
@@ -403,6 +438,43 @@ export function DashboardClient({
       setLoading(false);
     }
   }
+
+  const listMenuTarget = lists.find((l) => l.id === listMenuTargetId) ?? null;
+  const listMenuIsBuiltin =
+    listMenuTarget != null && isBuiltinWatchlistName(listMenuTarget.name);
+  const listMenuItems: ContextMenuItem[] = listMenuTarget
+    ? [
+        ...(!listMenuIsBuiltin
+          ? [
+              {
+                key: "rename",
+                label: "重新命名",
+                onSelect: () => void renameList(listMenuTarget),
+                disabled: loading,
+              },
+            ]
+          : []),
+        {
+          key: "clear",
+          label: "清空標的",
+          onSelect: () => void clearList(listMenuTarget),
+          disabled:
+            loading ||
+            listMenuTarget.items.filter((i) => i.kind === "SYMBOL").length === 0,
+        },
+        ...(!listMenuIsBuiltin
+          ? [
+              {
+                key: "delete",
+                label: "刪除清單",
+                onSelect: () => void deleteList(listMenuTarget),
+                disabled: loading,
+                danger: true,
+              },
+            ]
+          : []),
+      ]
+    : [];
 
   return (
     <div className="space-y-8">
@@ -496,26 +568,20 @@ export function DashboardClient({
                     {tab === "list" ? "清單" : "篩選"}
                   </button>
                 ))}
-                {watchlistTab === "list" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowNewList((v) => !v)}
-                  >
-                    {showNewList ? "取消" : "新增清單"}
-                  </Button>
-                )}
               </div>
             </div>
             {watchlistTab === "list" && (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {lists.map((list) => (
                   <button
                     key={list.id}
                     type="button"
                     draggable
                     onClick={() => setActiveListId(list.id)}
+                    onContextMenu={(e) => {
+                      setListMenuTargetId(list.id);
+                      listMenu.open(e);
+                    }}
                     onDragStart={(e) => {
                       e.dataTransfer.effectAllowed = "move";
                       e.dataTransfer.setData("text/plain", list.id);
@@ -524,30 +590,16 @@ export function DashboardClient({
                     onDragOver={(e) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
-                      if (draggingListId && draggingListId !== list.id) {
-                        setListDropTargetId(list.id);
-                      }
+                      handleListDragOver(list.id);
                     }}
-                    onDragLeave={() =>
-                      setListDropTargetId((id) => (id === list.id ? null : id))
-                    }
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      handleListDrop(list.id);
-                    }}
-                    onDragEnd={() => {
-                      setDraggingListId(null);
-                      setListDropTargetId(null);
-                    }}
-                    className={`cursor-grab rounded-full px-3 py-1 text-xs font-medium transition-colors active:cursor-grabbing ${
+                    onDrop={(e) => e.preventDefault()}
+                    onDragEnd={handleListDragEnd}
+                    title="右鍵可管理清單"
+                    className={`cursor-grab rounded-full px-3 py-1 text-xs font-medium transition-[opacity,background-color,color,box-shadow] duration-150 active:cursor-grabbing ${
                       list.id === activeList?.id
                         ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] ring-1 ring-[var(--color-primary)]/40"
                         : "bg-[var(--color-card-border)]/30 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-                    } ${draggingListId === list.id ? "opacity-50" : ""} ${
-                      listDropTargetId === list.id && draggingListId !== list.id
-                        ? "ring-1 ring-[var(--color-primary)]/50"
-                        : ""
-                    }`}
+                    } ${draggingListId === list.id ? "opacity-50" : ""}`}
                   >
                     {list.name}
                     <span className="ml-1 opacity-60">
@@ -555,6 +607,47 @@ export function DashboardClient({
                     </span>
                   </button>
                 ))}
+                {showNewList ? (
+                  <span className="relative inline-flex">
+                    {/* 隱形量測用文字，決定輸入框該有多寬 */}
+                    <span
+                      ref={newListMeasureRef}
+                      aria-hidden
+                      className="pointer-events-none invisible absolute whitespace-pre px-3 py-1 text-xs font-medium"
+                    >
+                      {newListName || "新清單名稱"}
+                    </span>
+                    <input
+                      ref={newListInputRef}
+                      autoFocus
+                      value={newListName}
+                      onChange={(e) => setNewListName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitNewList();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelNewList();
+                        }
+                      }}
+                      onBlur={() => void commitNewList()}
+                      placeholder="新清單名稱"
+                      style={{ width: newListInputWidth || NEW_LIST_MIN_WIDTH }}
+                      className="rounded-full border-none bg-[var(--color-primary)]/20 px-3 py-1 text-xs font-medium text-[var(--color-primary)] outline-none ring-1 ring-[var(--color-primary)]/40 transition-[width] duration-150 ease-out placeholder:text-[var(--color-primary)]/50"
+                    />
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startNewList}
+                    aria-label="新增清單"
+                    title="新增清單"
+                    className="flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded-full bg-[var(--color-card-border)]/30 text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                )}
               </div>
             )}
           </CardHeader>
@@ -580,27 +673,6 @@ export function DashboardClient({
             {/* ── 清單 tab ── */}
             {watchlistTab === "list" && (
               <>
-                {showNewList && (
-                  <form
-                    onSubmit={createList}
-                    className="flex flex-nowrap items-stretch gap-2"
-                  >
-                    <Input
-                      className="min-w-0 flex-1"
-                      value={newListName}
-                      onChange={(e) => setNewListName(e.target.value)}
-                      placeholder="新清單名稱"
-                    />
-                    <Button
-                      type="submit"
-                      disabled={loading}
-                      className="shrink-0 whitespace-nowrap px-5"
-                    >
-                      建立
-                    </Button>
-                  </form>
-                )}
-
                 {activeList && (
                   <>
                     <form
@@ -621,69 +693,37 @@ export function DashboardClient({
                         disabled={loading || !effectiveSymbol}
                         className="shrink-0 whitespace-nowrap px-5"
                       >
-                        加入
+                        {addingItem ? "加入中…" : "加入"}
                       </Button>
                     </form>
 
-                    <div className="flex flex-wrap gap-2 border-t border-[var(--color-card-border)]/40 pt-3">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={loading}
-                        onClick={() => void addWatchlistSeparator()}
-                      >
-                        新增標題
-                      </Button>
-                      {!isBuiltinList && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={loading}
-                          onClick={() => void renameActiveList()}
-                        >
-                          重新命名
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={loading || activeList.items.length === 0}
-                        onClick={() => void clearActiveList()}
-                      >
-                        清空標的
-                      </Button>
-                      {!isBuiltinList && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={loading}
-                          className="text-[var(--color-negative)] hover:border-[var(--color-negative)]/50"
-                          onClick={() => void deleteActiveList()}
-                        >
-                          刪除清單
-                        </Button>
-                      )}
+                    <div
+                      onContextMenu={(e) => {
+                        setItemsMenuTarget(null);
+                        itemsAreaMenu.open(e);
+                      }}
+                      title="右鍵可新增標題"
+                    >
+                      <WatchlistItemsList
+                        listId={activeList.id}
+                        items={activeList.items}
+                        onItemsChange={(items) =>
+                          setLists((prev) => {
+                            const next = prev.map((l) =>
+                              l.id === activeList.id ? { ...l, items } : l,
+                            );
+                            persistWatchlistsToCache(next);
+                            return next;
+                          })
+                        }
+                        onRemove={removeWatchlistItem}
+                        onRenameSeparator={renameWatchlistSeparator}
+                        onItemContextMenu={(item, e) => {
+                          setItemsMenuTarget(item);
+                          itemsAreaMenu.open(e);
+                        }}
+                      />
                     </div>
-
-                    <WatchlistItemsList
-                      listId={activeList.id}
-                      items={activeList.items}
-                      onItemsChange={(items) =>
-                        setLists((prev) => {
-                          const next = prev.map((l) =>
-                            l.id === activeList.id ? { ...l, items } : l,
-                          );
-                          persistWatchlistsToCache(next);
-                          return next;
-                        })
-                      }
-                      onRemove={removeWatchlistItem}
-                      onRenameSeparator={renameWatchlistSeparator}
-                    />
                   </>
                 )}
               </>
@@ -704,6 +744,38 @@ export function DashboardClient({
       </PageSection>
       </div>
 
+      <ContextMenu
+        position={listMenu.position}
+        items={listMenuItems}
+        onClose={listMenu.close}
+      />
+      <ContextMenu
+        position={itemsAreaMenu.position}
+        items={
+          activeList
+            ? itemsMenuTarget?.kind === "SEPARATOR"
+              ? [
+                  {
+                    key: "delete-separator",
+                    label: "刪除標題",
+                    onSelect: () => void removeWatchlistItem(itemsMenuTarget),
+                    disabled: loading,
+                    danger: true,
+                  },
+                ]
+              : [
+                  {
+                    key: "add-separator",
+                    label: "新增標題",
+                    onSelect: () =>
+                      void addWatchlistSeparator(itemsMenuTarget?.id ?? null),
+                    disabled: loading,
+                  },
+                ]
+            : []
+        }
+        onClose={itemsAreaMenu.close}
+      />
     </div>
   );
 }

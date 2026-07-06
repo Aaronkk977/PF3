@@ -378,7 +378,9 @@ export function PerformanceClient({
 
   useEffect(() => {
     if (!prefsReady) return;
+    const prefs = loadPerformancePrefs();
     savePerformancePrefs({
+      ...prefs,
       start,
       end,
       accountIds: selectedAccountIds,
@@ -489,7 +491,9 @@ export function PerformanceClient({
           selectedBenchmarks.join(","),
         );
         const cachedAt = new Date().toISOString();
+        const existingPrefs = loadPerformancePrefs();
         savePerformancePrefs({
+          ...existingPrefs,
           start,
           end,
           accountIds: selectedAccountIds,

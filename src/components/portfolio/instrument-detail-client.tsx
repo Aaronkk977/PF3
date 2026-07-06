@@ -502,7 +502,7 @@ export function InstrumentDetailClient({
       <PageSection id="instrument-notes" title="投資筆記" className="mt-8" navOrder={35}>
         <Card>
           <CardHeader>
-            <CardTitle>投資筆記（Markdown）</CardTitle>
+            <CardTitle>投資筆記</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             <div>

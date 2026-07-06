@@ -25,13 +25,33 @@ type Slice = {
 const CASH_LABEL = "\u73fe\u91d1";
 const CASH_FILL_CYBER = "hsl(186, 75%, 84%)";
 const CASH_FILL_LIGHT = "#a8a29e";
+const OTHER_LABEL = "\u5176\u4ed6";
+const OTHER_KEY = "__other__";
+/** \u4f54\u6bd4\u4f4e\u65bc\u6b64\u9580\u6abb\u7684\u6301\u5009\u6703\u88ab\u5408\u4f75\u9032\u300c\u5176\u4ed6\u300d\uff0c\u907f\u514d\u7d30\u788e\u5207\u7247\u585e\u6eff\u756b\u9762 */
+const MIN_SLICE_PCT = 0.008;
 
+/** \u73fe\u91d1\u6392\u6700\u524d\u3001\u5176\u9918\u4f9d\u5e02\u503c\u6392\u5e8f\uff1b\u4f54\u6bd4\u904e\u5c0f\u7684\u5207\u7247\u5408\u4f75\u6210\u300c\u5176\u4ed6\u300d\u4ee5\u514d\u756b\u9762\u96dc\u4e82 */
 function orderSlices(data: Slice[]): Slice[] {
   const cash = data.filter((s) => s.name === CASH_LABEL);
   const rest = data
     .filter((s) => s.name !== CASH_LABEL)
     .sort((a, b) => b.value - a.value);
-  return [...cash, ...rest];
+
+  const big = rest.filter((s) => s.pct >= MIN_SLICE_PCT);
+  const small = rest.filter((s) => s.pct < MIN_SLICE_PCT);
+
+  // \u53ea\u6709 0\uff5e1 \u6a94\u4f4e\u65bc\u9580\u6abb\u6642\uff0c\u5408\u4f75\u6c92\u6709\u610f\u7fa9\uff0c\u7dad\u6301\u539f\u6a23\u986f\u793a
+  if (small.length <= 1) {
+    return [...cash, ...rest];
+  }
+
+  const other: Slice = {
+    name: OTHER_LABEL,
+    value: small.reduce((sum, s) => sum + s.value, 0),
+    pct: small.reduce((sum, s) => sum + s.pct, 0),
+    key: OTHER_KEY,
+  };
+  return [...cash, ...big, other];
 }
 
 /** 持倉配置：Cyberpunk 霓虹青藍漸層（高飽和、偏亮，避免彩虹色過花） */
@@ -217,7 +237,9 @@ export function AllocationChart({
               onMouseLeave={() => setActiveIndex(undefined)}
               onClick={(_, index) => {
                 const slice = ordered[index];
-                if (slice && onSliceClick) onSliceClick(slice, index);
+                if (slice && onSliceClick && slice.key !== OTHER_KEY) {
+                  onSliceClick(slice, index);
+                }
               }}
               label={showOuterLabels ? renderSliceLabel : false}
               labelLine={showOuterLabels ? renderSliceLabelLine : false}

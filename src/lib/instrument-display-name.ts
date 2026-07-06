@@ -82,6 +82,76 @@ export async function fetchTaiwanChineseName(
   return (await twseCodeQuery(code)) ?? (await tpexCodeQuery(code));
 }
 
+export type TaiwanStockSuggestion = { symbol: string; name: string };
+
+const PLAIN_STOCK_CODE = /^\d{4}$/;
+
+/** 上市（TWSE）代碼／中文名「模糊搜尋」——同一支 API 也接受公司名關鍵字 */
+async function twseCodeSearch(query: string): Promise<TaiwanStockSuggestion[]> {
+  const res = await fetchWithShortTimeout(
+    `https://www.twse.com.tw/rwd/zh/api/codeQuery?query=${encodeURIComponent(query)}`,
+    { next: { revalidate: 3600 } },
+    6_000,
+  );
+  if (!res?.ok) return [];
+  try {
+    const data = (await res.json()) as { suggestions?: string[] };
+    const out: TaiwanStockSuggestion[] = [];
+    for (const s of data.suggestions ?? []) {
+      const [code, name] = s.split("\t");
+      // 排除權證／TDR／特別股等非普通股代碼，只留 4 碼數字的一般股票
+      if (!code || !name || !PLAIN_STOCK_CODE.test(code)) continue;
+      out.push({ symbol: `${code}.TW`, name: name.trim() });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** 上櫃（TPEx）代碼／中文名「模糊搜尋」——同一支 API 也接受公司名關鍵字 */
+async function tpexCodeSearch(query: string): Promise<TaiwanStockSuggestion[]> {
+  const res = await fetchWithShortTimeout(
+    `https://www.tpex.org.tw/www/zh-tw/api/codeQuery?query=${encodeURIComponent(query)}`,
+    { next: { revalidate: 3600 } },
+    6_000,
+  );
+  if (!res?.ok) return [];
+  try {
+    const data = (await res.json()) as {
+      suggestions?: { type?: string; data?: string[] }[];
+    };
+    const out: TaiwanStockSuggestion[] = [];
+    for (const group of data.suggestions ?? []) {
+      for (const entry of group.data ?? []) {
+        const [label, code] = entry.split("\t");
+        if (!code || !label || !PLAIN_STOCK_CODE.test(code)) continue;
+        const name = label.startsWith(code)
+          ? label.slice(code.length).trim()
+          : label.trim();
+        out.push({ symbol: `${code}.TWO`, name });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 用中文公司名（或代碼）搜尋台股（上市＋上櫃），僅回傳普通股。
+ * 供追蹤清單／交易輸入的代號搜尋框使用，讓「台積電」也能查得到 2330.TW。
+ */
+export async function searchTaiwanStocksByQuery(
+  query: string,
+): Promise<TaiwanStockSuggestion[]> {
+  const [twse, tpex] = await Promise.all([
+    twseCodeSearch(query),
+    tpexCodeSearch(query),
+  ]);
+  return [...twse, ...tpex];
+}
+
 /** 台股優先中文名、美股優先英文名 */
 export function pickDisplayName(
   symbol: string,

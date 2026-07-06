@@ -105,15 +105,13 @@ export async function POST(request: NextRequest) {
 
   if (action === "addSeparator") {
     const listId = body.listId as string | undefined;
-    const label = (body.label as string)?.trim();
-    if (!listId || !label) {
-      return NextResponse.json(
-        { error: "listId 與 label 必填" },
-        { status: 400 },
-      );
+    const label = (body.label as string) ?? "";
+    const afterItemId = (body.afterItemId as string | undefined) ?? null;
+    if (!listId) {
+      return NextResponse.json({ error: "listId 必填" }, { status: 400 });
     }
     try {
-      const item = await addWatchlistSeparator(listId, label);
+      const item = await addWatchlistSeparator(listId, label, afterItemId);
       return NextResponse.json(item, { status: 201 });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "新增失敗";
@@ -123,12 +121,9 @@ export async function POST(request: NextRequest) {
 
   if (action === "updateSeparator") {
     const itemId = body.itemId as string | undefined;
-    const label = (body.label as string)?.trim();
-    if (!itemId || !label) {
-      return NextResponse.json(
-        { error: "itemId 與 label 必填" },
-        { status: 400 },
-      );
+    const label = (body.label as string) ?? "";
+    if (!itemId) {
+      return NextResponse.json({ error: "itemId 必填" }, { status: 400 });
     }
     try {
       const item = await updateWatchlistSeparator(itemId, label);

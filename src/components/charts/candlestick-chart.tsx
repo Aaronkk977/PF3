@@ -178,6 +178,12 @@ export function CandlestickChart({
       layout: {
         background: { type: ColorType.Solid, color: chartTheme.background },
         textColor: chartTheme.muted,
+        panes: {
+          // 用跟卡片邊框同色系、低透明度的細線，避免預設深藍紫色跟主題不搭
+          separatorColor: withAlpha(chartTheme.cardBorder, 0.5),
+          separatorHoverColor: withAlpha(chartTheme.cardBorder, 0.15),
+          enableResize: false,
+        },
       },
       grid: {
         vertLines: { color: grid },
@@ -188,7 +194,7 @@ export function CandlestickChart({
     });
     chartRef.current = chart;
 
-    // ── Candlestick series（保留下方空間給成交量）─────────────────────
+    // ── Candlestick series（主圖，佔上方獨立子圖）────────────────────────
     const candle = chart.addSeries(CandlestickSeries, {
       upColor: chartTheme.positive,
       downColor: chartTheme.negative,
@@ -197,22 +203,23 @@ export function CandlestickChart({
       wickUpColor: chartTheme.positive,
       wickDownColor: chartTheme.negative,
     });
-    candle.priceScale().applyOptions({
-      scaleMargins: { top: 0.05, bottom: 0.22 },
-    });
     candleRef.current = candle;
 
-    // ── Volume series（獨立價格軸，疊在下方 22% 區域）───────────────────
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: "volume" },
-      priceScaleId: "volume",
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.82, bottom: 0 },
-    });
+    // ── Volume series（獨立子圖，與主圖用可見分隔線隔開，各自有自己的座標軸）──
+    const volumeSeries = chart.addSeries(
+      HistogramSeries,
+      {
+        priceFormat: { type: "volume" },
+        lastValueVisible: true,
+        priceLineVisible: false,
+      },
+      1,
+    );
     volumeRef.current = volumeSeries;
+
+    const panes = chart.panes();
+    panes[0]?.setStretchFactor(3);
+    panes[1]?.setStretchFactor(1);
 
     // ── MA series ─────────────────────────────────────────────────────
     const ma10s = chart.addSeries(LineSeries, {

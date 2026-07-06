@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useLayoutEffect, useRef, useState } from "react";
 import { NAV_PREFETCH, prefetchPage } from "@/lib/prefetch-page-data";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,31 @@ const links = [
 
 export function Nav() {
   const pathname = usePathname();
+  const navRef = useRef<HTMLElement>(null);
+  const linkRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(
+    null,
+  );
+
+  useLayoutEffect(() => {
+    function measure() {
+      const container = navRef.current;
+      const active = linkRefs.current[pathname];
+      if (!container || !active) {
+        setIndicator(null);
+        return;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      setIndicator({
+        left: activeRect.left - containerRect.left,
+        width: activeRect.width,
+      });
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [pathname]);
 
   return (
     <header className="sticky top-0 z-50 border-b border-[var(--color-card-border)]/60 bg-[var(--color-background)]/95 backdrop-blur-md">
@@ -28,10 +54,21 @@ export function Nav() {
             Trading & Investment Assistant
           </span>
         </Link>
-        <nav className="flex flex-wrap gap-1">
+        <nav ref={navRef} className="relative flex flex-wrap gap-1">
+          {/* 跟著目前頁面橫向滑動的高亮底色，取代逐項各自切換背景 */}
+          {indicator && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-0 z-0 h-full rounded-md border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/15 transition-[left,width] duration-300 ease-out"
+              style={{ left: indicator.left, width: indicator.width }}
+            />
+          )}
           {links.map((link) => (
             <Link
               key={link.href}
+              ref={(el) => {
+                linkRefs.current[link.href] = el;
+              }}
               href={link.href}
               prefetch={link.href === "/transactions" ? false : undefined}
               onMouseEnter={() => {
@@ -43,9 +80,9 @@ export function Nav() {
                 if (target) prefetchPage(target.cacheKey, target.url);
               }}
               className={cn(
-                "rounded-md px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors",
+                "relative z-10 rounded-md px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors",
                 pathname === link.href
-                  ? "border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                  ? "text-[var(--color-primary)]"
                   : "text-[var(--color-muted)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-primary)]",
               )}
             >

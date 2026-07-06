@@ -3,6 +3,7 @@ import {
   fetchTaiwanChineseName,
   isTaiwanSymbol,
   pickDisplayName,
+  searchTaiwanStocksByQuery,
 } from "@/lib/instrument-display-name";
 import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 
@@ -27,6 +28,13 @@ type YahooSearchResponse = {
 
 function hasCjk(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
+}
+
+/** \u7528\u4e2d\u6587\u516c\u53f8\u540d\u67e5\u8a62\u53f0\u80a1\u4ee3\u78bc\uff08TWSE\uff0fTPEx \u5b98\u65b9 API \u540c\u6642\u652f\u63f4\u4ee3\u78bc\u8207\u4e2d\u6587\u540d\u95dc\u9375\u5b57\uff09 */
+async function searchTaiwanByChineseName(query: string): Promise<SearchResult[]> {
+  if (!hasCjk(query)) return [];
+  const hits = await searchTaiwanStocksByQuery(query).catch(() => []);
+  return hits.map((h) => ({ symbol: h.symbol, name: h.name }));
 }
 
 function isPoorInstrumentName(symbol: string, name: string): boolean {
@@ -119,9 +127,10 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
   const shouldSuggestTaiwanVix =
     upperQ.includes("VIX") || upperQ.includes("TWN");
 
-  const [local, remote] = await Promise.all([
+  const [local, remote, twByName] = await Promise.all([
     searchLocalInstruments(q),
     searchYahooInstruments(q).catch(() => [] as SearchResult[]),
+    searchTaiwanByChineseName(q),
   ]);
 
   const seen = new Set<string>();
@@ -135,7 +144,8 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
     });
     seen.add("VIXTWN");
   }
-  for (const item of [...local, ...remote]) {
+  // 中文名稱查詢結果來自交易所官方 API，最準確，優先排前面
+  for (const item of [...twByName, ...local, ...remote]) {
     const key = item.symbol.toUpperCase();
     if (seen.has(key)) continue;
     seen.add(key);

@@ -246,20 +246,27 @@ export async function removeFromWatchlist(listId: string, symbol: string) {
   });
 }
 
-/** 新增分隔線／小標項目（無代號，symbol 為 null） */
-export async function addWatchlistSeparator(listId: string, label: string) {
+/**
+ * 新增分隔線／小標項目（無代號，symbol 為 null）。
+ * label 可為空字串（純分隔線，不顯示文字）。
+ * afterItemId 指定時，插入到該項目正下方；不指定則加到清單最後。
+ */
+export async function addWatchlistSeparator(
+  listId: string,
+  label: string,
+  afterItemId?: string | null,
+) {
   const list = await prisma.watchlist.findUnique({ where: { id: listId } });
   if (!list) throw new Error("找不到清單");
 
   const trimmed = label.trim();
-  if (!trimmed) throw new Error("標題文字必填");
 
   const maxOrder = await prisma.watchlistItem.aggregate({
     where: { watchlistId: listId },
     _max: { sortOrder: true },
   });
 
-  return prisma.watchlistItem.create({
+  const created = await prisma.watchlistItem.create({
     data: {
       watchlistId: listId,
       symbol: null,
@@ -268,12 +275,25 @@ export async function addWatchlistSeparator(listId: string, label: string) {
       sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
     },
   });
+
+  if (afterItemId) {
+    const existing = await prisma.watchlistItem.findMany({
+      where: { watchlistId: listId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+    });
+    const ids = existing.map((i) => i.id).filter((id) => id !== created.id);
+    const insertAt = ids.indexOf(afterItemId) + 1;
+    ids.splice(insertAt, 0, created.id);
+    await reorderWatchlistItems(listId, ids);
+  }
+
+  return created;
 }
 
-/** 編輯分隔線／小標文字 */
+/** 編輯分隔線／小標文字（可清空成純分隔線） */
 export async function updateWatchlistSeparator(itemId: string, label: string) {
   const trimmed = label.trim();
-  if (!trimmed) throw new Error("標題文字必填");
 
   const item = await prisma.watchlistItem.findUnique({ where: { id: itemId } });
   if (!item || item.kind !== "SEPARATOR") throw new Error("找不到分隔線項目");
