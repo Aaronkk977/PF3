@@ -16,6 +16,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Exclude build paths from Windows Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.npm"
+          Add-MpPreference -ExclusionProcess "electron-builder.exe"
+          Add-MpPreference -ExclusionProcess "makensis.exe"
+          Add-MpPreference -ExclusionProcess "7za.exe"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
