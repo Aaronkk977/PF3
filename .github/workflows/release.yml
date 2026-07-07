@@ -16,11 +16,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Exclude build paths from Windows Defender
+      - name: Disable Windows Defender realtime scanning
         shell: pwsh
         run: |
+          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop; Write-Host "Realtime monitoring disabled" } catch { Write-Host "Could not disable realtime monitoring: $_" }
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
           Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
+          Add-MpPreference -ExclusionPath "$env:TEMP"
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.npm"
           Add-MpPreference -ExclusionProcess "electron-builder.exe"
           Add-MpPreference -ExclusionProcess "makensis.exe"
@@ -50,7 +52,26 @@ jobs:
         run: npm run prisma-cli-bundle:install
 
       - name: Build and publish Electron installer
-        run: npx electron-builder --win -c electron-builder.config.cjs --publish always
+        shell: pwsh
+        # 用 heartbeat 包住 electron-builder：每 60 秒印出打包子進程與其 CPU 時間，
+        # 讓 log 能分辨「還在壓縮（CPU 持續增加）」和「真的掛住（CPU 凍結）」。
+        run: |
+          $p = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/c", "npx", "electron-builder", "--win", "-c", "electron-builder.config.cjs", "--publish", "always" `
+            -NoNewWindow -PassThru
+          $null = $p.Handle  # 先快取 handle，否則結束後讀不到 ExitCode
+          while (-not $p.HasExited) {
+            Start-Sleep -Seconds 60
+            $procs = Get-Process -Name "7za", "makensis", "signtool", "app-builder" -ErrorAction SilentlyContinue
+            if ($procs) {
+              $line = ($procs | ForEach-Object { "{0}(pid {1}) cpu={2:N0}s" -f $_.ProcessName, $_.Id, $_.TotalProcessorTime.TotalSeconds }) -join "; "
+            } else {
+              $line = "no packer child processes"
+            }
+            Write-Host ("[heartbeat {0:HH:mm:ss}] {1}" -f (Get-Date), $line)
+          }
+          exit $p.ExitCode
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DEBUG: "electron-builder"
