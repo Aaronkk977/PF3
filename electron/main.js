@@ -3,7 +3,8 @@ const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
-const { fork, spawnSync } = require("child_process");
+const { fork } = require("child_process");
+const { runMigrations } = require("./migrate");
 
 const PORT = 3847;
 const HOSTNAME = "127.0.0.1";
@@ -49,32 +50,14 @@ function waitForServer(url, timeoutMs) {
 }
 
 /** 對現有 SQLite DB 套用尚未套用的 migration（不動已套用過的，安全） */
-function runPrismaMigrateDeploy(env) {
-  const resourcesRoot = getResourcesRoot();
-  const schemaPath = path.join(resourcesRoot, "prisma", "schema.prisma");
-  const prismaCliEntry = app.isPackaged
-    ? path.join(resourcesRoot, "prisma-cli", "node_modules", "prisma", "build", "index.js")
-    : path.join(resourcesRoot, "node_modules", "prisma", "build", "index.js");
-
-  if (!fs.existsSync(prismaCliEntry)) {
-    throw new Error(`找不到 Prisma CLI：${prismaCliEntry}`);
-  }
-  if (!fs.existsSync(schemaPath)) {
-    throw new Error(`找不到 Prisma schema：${schemaPath}`);
-  }
-
-  const result = spawnSync(
-    process.execPath,
-    [prismaCliEntry, "migrate", "deploy", "--schema", schemaPath],
-    {
-      env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-      encoding: "utf-8",
-    },
-  );
-
-  if (result.status !== 0) {
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    throw new Error(`資料庫更新失敗 (prisma migrate deploy)：\n${output}`);
+function applyPendingMigrations(dbFilePath) {
+  const migrationsDir = path.join(getResourcesRoot(), "prisma", "migrations");
+  try {
+    return runMigrations(dbFilePath, migrationsDir);
+  } catch (err) {
+    throw new Error(
+      `資料庫更新失敗：${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -148,7 +131,7 @@ async function bootstrap() {
     HOSTNAME,
   };
 
-  runPrismaMigrateDeploy(env);
+  applyPendingMigrations(path.join(dataDir, "portfolio.db"));
   startNextServer(env);
   await waitForServer(BASE_URL, HEALTH_TIMEOUT_MS);
   createWindow();

@@ -19,7 +19,7 @@ module.exports = {
     output: "release",
   },
   afterPack: "scripts/electron-after-pack.cjs",
-  files: ["electron/main.js", "electron/preload.js", "package.json"],
+  files: ["electron/main.js", "electron/preload.js", "electron/migrate.js", "package.json"],
   extraResources: [
     {
       from: standaloneSource,
@@ -27,18 +27,8 @@ module.exports = {
       filter: ["**/*"],
     },
     {
-      from: "prisma/schema.prisma",
-      to: "prisma/schema.prisma",
-      filter: ["**/*"],
-    },
-    {
       from: "prisma/migrations",
       to: "prisma/migrations",
-      filter: ["**/*"],
-    },
-    {
-      from: "electron/prisma-cli-bundle/node_modules",
-      to: "prisma-cli/node_modules",
       filter: ["**/*"],
     },
   ],

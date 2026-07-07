@@ -1,8 +1,0 @@
-{
-  "name": "prisma-cli-bundle",
-  "private": true,
-  "description": "獨立安裝的 Prisma CLI，供打包進 Electron 用於啟動時執行 migrate deploy（避免 npm hoisting 造成缺相依套件）",
-  "dependencies": {
-    "prisma": "6.19.3"
-  }
-}

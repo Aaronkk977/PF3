@@ -48,9 +48,6 @@ jobs:
       - name: Build Next.js standalone bundle
         run: npm run build:app
 
-      - name: Install isolated Prisma CLI bundle
-        run: npm run prisma-cli-bundle:install
-
       - name: Build and publish Electron installer
         shell: pwsh
         # 用 heartbeat 包住 electron-builder：每 60 秒印出打包子進程與其 CPU 時間，
@@ -75,3 +72,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           DEBUG: "electron-builder"
+          # NSIS 差異更新模式的壓縮是單執行緒 LZMA，runner 單核跑 mx=9 要 40 分鐘以上
+          # （多次撞上 timeout）。降到 mx=4 實測快 6.5 倍，安裝檔僅大 13%（~250MB）。
+          ELECTRON_BUILDER_COMPRESSION_LEVEL: "4"

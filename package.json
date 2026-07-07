@@ -1,6 +1,6 @@
 {
   "name": "portfolio-performance",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -27,8 +27,7 @@
     "market:sync:history": "tsx scripts/market-sync.ts --history",
     "postinstall": "prisma generate",
     "electron:dev": "electron .",
-    "prisma-cli-bundle:install": "npm install --omit=dev --prefix electron/prisma-cli-bundle",
-    "dist:win": "npm run build:app && npm run prisma-cli-bundle:install && electron-builder --win -c electron-builder.config.cjs"
+    "dist:win": "npm run build:app && electron-builder --win -c electron-builder.config.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
