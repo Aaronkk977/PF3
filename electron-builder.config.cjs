@@ -45,6 +45,10 @@ module.exports = {
   asarUnpack: ["**/*.node", "**/*.dll.node", "**/@prisma/**", "**/.prisma/**"],
   win: {
     target: "nsis",
+    // 目前沒有付費的程式碼簽章憑證，明確關閉自動簽章，
+    // 避免 electron-builder 嘗試呼叫 signtool.exe 連線 timestamp
+    // server 時，在 CI 環境中無限期 hang 住（曾實際卡住 25 分鐘以上）。
+    signAndEditExecutable: false,
   },
   nsis: {
     oneClick: true,
