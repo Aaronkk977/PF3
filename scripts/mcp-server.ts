@@ -5,6 +5,7 @@
  *   get_holdings          — 目前持倉列表（net qty > 0）
  *   search_transactions   — 搜尋交易紀錄（可篩代號、類型、日期範圍）
  *   get_portfolio_summary — 組合整體概況（總市值、未實現損益、帳戶拆解）
+ *   get_trading_review    — 期間操作複盤（逐檔/逐筆損益、進場品質、止損排行）
  *
  * Run:
  *   npx tsx scripts/mcp-server.ts
@@ -183,6 +184,11 @@ async function getTradingReview(args: {
   date_to?: string;
   pnl_filter?: "loss" | "profit" | "realized" | "all";
   symbol?: string;
+  account?: string;
+  tag?: string;
+  sort_by?: "buyAmt" | "sellAmt" | "realizedPnl" | "lossAmt" | "buyPnl" | "buyLossAmt" | "buyLossPct";
+  top_n?: number;
+  include_transactions?: boolean;
 }) {
   let from: Date, to: Date;
   if (args.date_from || args.date_to) {
@@ -193,11 +199,25 @@ async function getTradingReview(args: {
   }
 
   // 1. Transactions in the review period
+  const periodWhere: Prisma.TransactionWhereInput = { date: { gte: from, lte: to }, type: { in: ["BUY", "SELL"] } };
+  if (args.account) periodWhere.account = { name: { contains: args.account } };
+
   const periodTxs = await prisma.transaction.findMany({
-    where: { date: { gte: from, lte: to }, type: { in: ["BUY", "SELL"] } },
-    include: { instrument: true, account: { select: { name: true } } },
+    where: periodWhere,
+    include: {
+      instrument: { include: { tags: { include: { tag: true } } } },
+      account: { select: { name: true } },
+    },
     orderBy: { date: "asc" },
   });
+
+  // symbol -> tag names, used for tag filtering and the byTag rollup below
+  const symbolTags = new Map<string, string[]>();
+  for (const t of periodTxs) {
+    if (t.instrument && !symbolTags.has(t.instrument.symbol)) {
+      symbolTags.set(t.instrument.symbol, t.instrument.tags.map((x) => x.tag.name));
+    }
+  }
 
   // 2. For realized P&L: need full history per symbol that had SELLs in period
   const sellSymbols = [
@@ -208,44 +228,103 @@ async function getTradingReview(args: {
     ),
   ];
 
+  const historicalWhere: Prisma.TransactionWhereInput = {
+    instrument: { symbol: { in: sellSymbols } },
+    type: { in: ["BUY", "SELL"] },
+    date: { lt: from },
+  };
+  if (args.account) historicalWhere.account = { name: { contains: args.account } };
+
   const historicalTxs = sellSymbols.length
     ? await prisma.transaction.findMany({
-        where: {
-          instrument: { symbol: { in: sellSymbols } },
-          type: { in: ["BUY", "SELL"] },
-          date: { lt: from },
-        },
+        where: historicalWhere,
         include: { instrument: true },
         orderBy: { date: "asc" },
       })
     : [];
 
-  // Compute avg cost per symbol from history before the period
-  const avgCostMap = new Map<string, { qty: number; costBasis: number }>();
+  // 2b. Current prices — used for the "if these buys were still held, what would they be worth today" metric
+  const allSymbols = [...new Set(periodTxs.filter((t) => t.instrument).map((t) => t.instrument!.symbol))];
+  const priceRows = allSymbols.length
+    ? await prisma.priceCache.findMany({ where: { symbol: { in: allSymbols } }, orderBy: { date: "desc" } })
+    : [];
+  const latestPrice = new Map<string, number>();
+  for (const row of priceRows) {
+    if (!latestPrice.has(row.symbol)) latestPrice.set(row.symbol, row.close);
+  }
+
+  // Compute avg cost (and weighted-average entry date, for holding-period calc) per symbol from history before the period
+  type Pos = { qty: number; costBasis: number; avgDate: number };
+  const avgCostMap = new Map<string, Pos>();
+  function applyBuy(pos: Pos, qty: number, amount: number, dateMs: number) {
+    const newQty = pos.qty + qty;
+    pos.avgDate = pos.qty > 0 ? (pos.avgDate * pos.qty + dateMs * qty) / newQty : dateMs;
+    pos.costBasis += amount;
+    pos.qty = newQty;
+  }
   for (const tx of historicalTxs) {
     if (!tx.instrument) continue;
     const sym = tx.instrument.symbol;
-    if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0 });
+    if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0, avgDate: tx.date.getTime() });
     const pos = avgCostMap.get(sym)!;
     const qty = toNum(tx.quantity);
     const px = toNum(tx.price);
     const fees = toNum(tx.fee) + toNum(tx.tax);
-    if (tx.type === "BUY") { pos.costBasis += qty * px + fees; pos.qty += qty; }
+    if (tx.type === "BUY") applyBuy(pos, qty, qty * px + fees, tx.date.getTime());
     else if (tx.type === "SELL" && pos.qty > 0) {
       pos.costBasis -= (pos.costBasis / pos.qty) * qty;
       pos.qty -= qty;
     }
   }
 
-  // 3. Aggregate per-symbol activity during the period
+  // 3. Aggregate per-symbol activity during the period, and record every individual sell trade
   type SymActivity = {
     symbol: string; name: string | null;
     buyQty: number; buyAmt: number; buyCount: number;
     sellQty: number; sellAmt: number; sellCount: number;
     realizedPnl: number | null;
+    buyPnlIfStillHeld: number | null;
     notes: string[];
   };
   const symMap = new Map<string, SymActivity>();
+
+  // Per-tag rollup (a symbol can carry multiple tags, e.g. 被動元件/光/TGV — so tag totals can overlap and won't sum to the grand total)
+  type TagActivity = {
+    tag: string; symbols: Set<string>;
+    buyQty: number; buyAmt: number; buyCount: number;
+    sellQty: number; sellAmt: number; sellCount: number;
+    realizedPnl: number | null;
+    buyPnlIfStillHeld: number | null;
+  };
+  const tagMap = new Map<string, TagActivity>();
+  function getTagActivity(tagName: string): TagActivity {
+    if (!tagMap.has(tagName)) {
+      tagMap.set(tagName, {
+        tag: tagName, symbols: new Set(),
+        buyQty: 0, buyAmt: 0, buyCount: 0,
+        sellQty: 0, sellAmt: 0, sellCount: 0,
+        realizedPnl: null, buyPnlIfStillHeld: null,
+      });
+    }
+    return tagMap.get(tagName)!;
+  }
+
+  type TxOut = {
+    date: string; type: string; account: string;
+    symbol: string | null; name: string | null;
+    qty: number; price: number; fee: number; tax: number; note: string | null;
+    avgCost?: number; holdingDays?: number | null; realizedPnl?: number; realizedPnlPct?: number | null;
+  };
+  const allTransactionsOut: TxOut[] = [];
+
+  type SellTrade = {
+    date: string; symbol: string; name: string | null; account: string;
+    qty: number; price: number; fee: number; tax: number;
+    avgCost: number; holdingDays: number | null;
+    realizedPnl: number; realizedPnlPct: number | null;
+    note: string | null;
+  };
+  const sellTrades: SellTrade[] = [];
 
   for (const tx of periodTxs) {
     if (!tx.instrument) continue;
@@ -255,42 +334,91 @@ async function getTradingReview(args: {
         symbol: sym, name: tx.instrument.name,
         buyQty: 0, buyAmt: 0, buyCount: 0,
         sellQty: 0, sellAmt: 0, sellCount: 0,
-        realizedPnl: null, notes: [],
+        realizedPnl: null, buyPnlIfStillHeld: null, notes: [],
       });
     }
     const act = symMap.get(sym)!;
     const qty = toNum(tx.quantity);
     const px = toNum(tx.price);
-    const fees = toNum(tx.fee) + toNum(tx.tax);
+    const fee = toNum(tx.fee);
+    const tax = toNum(tx.tax);
+    const fees = fee + tax;
+
+    const txOut: TxOut = {
+      date: fmtDate(tx.date), type: tx.type, account: tx.account.name,
+      symbol: sym, name: tx.instrument.name,
+      qty, price: px, fee, tax, note: tx.note ?? null,
+    };
+
+    const tags = symbolTags.get(sym) ?? [];
 
     if (tx.type === "BUY") {
       act.buyQty += qty; act.buyAmt += qty * px + fees; act.buyCount++;
-      if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0 });
-      const pos = avgCostMap.get(sym)!;
-      pos.costBasis += qty * px + fees; pos.qty += qty;
+      const currentPrice = latestPrice.get(sym);
+      let entryPnl: number | null = null;
+      if (currentPrice != null) {
+        entryPnl = qty * (currentPrice - px) - fees;
+        act.buyPnlIfStillHeld = (act.buyPnlIfStillHeld ?? 0) + entryPnl;
+      }
+      for (const tagName of tags) {
+        const ta = getTagActivity(tagName);
+        ta.symbols.add(sym); ta.buyQty += qty; ta.buyAmt += qty * px + fees; ta.buyCount++;
+        if (entryPnl != null) ta.buyPnlIfStillHeld = (ta.buyPnlIfStillHeld ?? 0) + entryPnl;
+      }
+      if (!avgCostMap.has(sym)) avgCostMap.set(sym, { qty: 0, costBasis: 0, avgDate: tx.date.getTime() });
+      applyBuy(avgCostMap.get(sym)!, qty, qty * px + fees, tx.date.getTime());
     } else if (tx.type === "SELL") {
       act.sellQty += qty; act.sellAmt += qty * px - fees; act.sellCount++;
+      for (const tagName of tags) {
+        const ta = getTagActivity(tagName);
+        ta.symbols.add(sym); ta.sellQty += qty; ta.sellAmt += qty * px - fees; ta.sellCount++;
+      }
       if (avgCostMap.has(sym)) {
         const pos = avgCostMap.get(sym)!;
         if (pos.qty > 0) {
           const avgCost = pos.costBasis / pos.qty;
-          act.realizedPnl = (act.realizedPnl ?? 0) + (px - avgCost) * qty - fees;
+          const pnl = (px - avgCost) * qty - fees;
+          const pnlPct = avgCost > 0 ? Math.round((pnl / (avgCost * qty)) * 10000) / 100 : null;
+          const holdingDays = Math.round((tx.date.getTime() - pos.avgDate) / 86400000);
+
+          act.realizedPnl = (act.realizedPnl ?? 0) + pnl;
+          for (const tagName of tags) {
+            const ta = getTagActivity(tagName);
+            ta.realizedPnl = (ta.realizedPnl ?? 0) + pnl;
+          }
+
+          txOut.avgCost = Math.round(avgCost * 100) / 100;
+          txOut.holdingDays = holdingDays;
+          txOut.realizedPnl = Math.round(pnl);
+          txOut.realizedPnlPct = pnlPct;
+
+          sellTrades.push({
+            date: fmtDate(tx.date), symbol: sym, name: tx.instrument.name, account: tx.account.name,
+            qty, price: px, fee, tax,
+            avgCost: Math.round(avgCost * 100) / 100,
+            holdingDays,
+            realizedPnl: Math.round(pnl),
+            realizedPnlPct: pnlPct,
+            note: tx.note ?? null,
+          });
+
           pos.costBasis -= avgCost * qty;
           pos.qty -= qty;
         }
       }
     }
+    allTransactionsOut.push(txOut);
     if (tx.note) act.notes.push(`[${fmtDate(tx.date)}] ${tx.note}`);
   }
 
-  // 4. Filter + sort
+  // 4. Filter + sort bySymbol
   let activities = [...symMap.values()];
+  const matchesSymbol = (sym: string) => !args.symbol || sym.toUpperCase().includes(args.symbol.toUpperCase());
+  const matchesTag = (sym: string) =>
+    !args.tag || (symbolTags.get(sym) ?? []).some((t) => t.toUpperCase().includes(args.tag!.toUpperCase()));
 
-  // symbol filter
-  if (args.symbol) {
-    const sym = args.symbol.toUpperCase();
-    activities = activities.filter((a) => a.symbol.toUpperCase().includes(sym));
-  }
+  // symbol / tag filters — also applied to sellTrades below so the two views stay consistent
+  activities = activities.filter((a) => matchesSymbol(a.symbol) && matchesTag(a.symbol));
 
   // pnl filter
   const pnlFilter = args.pnl_filter ?? "all";
@@ -307,46 +435,101 @@ async function getTradingReview(args: {
     activities.sort((a, b) => (b.buyAmt + b.sellAmt) - (a.buyAmt + a.sellAmt));
   }
 
+  // explicit sort_by overrides the default/pnl_filter ordering above
+  if (args.sort_by === "buyAmt") {
+    activities.sort((a, b) => b.buyAmt - a.buyAmt);
+  } else if (args.sort_by === "sellAmt") {
+    activities.sort((a, b) => b.sellAmt - a.sellAmt);
+  } else if (args.sort_by === "realizedPnl") {
+    activities.sort((a, b) => (b.realizedPnl ?? -Infinity) - (a.realizedPnl ?? -Infinity)); // best first
+  } else if (args.sort_by === "lossAmt") {
+    activities.sort((a, b) => (a.realizedPnl ?? Infinity) - (b.realizedPnl ?? Infinity)); // worst first
+  } else if (args.sort_by === "buyPnl") {
+    activities.sort((a, b) => (b.buyPnlIfStillHeld ?? -Infinity) - (a.buyPnlIfStillHeld ?? -Infinity)); // best entries first
+  } else if (args.sort_by === "buyLossAmt") {
+    activities.sort((a, b) => (a.buyPnlIfStillHeld ?? Infinity) - (b.buyPnlIfStillHeld ?? Infinity)); // worst entries first
+  } else if (args.sort_by === "buyLossPct") {
+    activities.sort((a, b) => {
+      const pa = a.buyAmt > 0 && a.buyPnlIfStillHeld != null ? a.buyPnlIfStillHeld / a.buyAmt : Infinity;
+      const pb = b.buyAmt > 0 && b.buyPnlIfStillHeld != null ? b.buyPnlIfStillHeld / b.buyAmt : Infinity;
+      return pa - pb; // worst entry % first
+    });
+  }
+
   const totalBuyAmt = [...symMap.values()].reduce((s, a) => s + a.buyAmt, 0);
   const totalSellAmt = [...symMap.values()].reduce((s, a) => s + a.sellAmt, 0);
   const totalRealizedPnl = [...symMap.values()].reduce((s, a) => s + (a.realizedPnl ?? 0), 0);
+  const matchedCount = activities.length;
+
+  let bySymbolOut = activities.map((a) => ({
+    symbol: a.symbol,
+    name: a.name,
+    bought: a.buyCount > 0
+      ? { times: a.buyCount, qty: Math.round(a.buyQty), amount: Math.round(a.buyAmt) }
+      : null,
+    sold: a.sellCount > 0
+      ? { times: a.sellCount, qty: Math.round(a.sellQty), amount: Math.round(a.sellAmt) }
+      : null,
+    realizedPnl: a.realizedPnl != null ? Math.round(a.realizedPnl) : null,
+    buyPnlIfStillHeld: a.buyPnlIfStillHeld != null ? Math.round(a.buyPnlIfStillHeld) : null,
+    buyPnlIfStillHeldPct: a.buyPnlIfStillHeld != null && a.buyAmt > 0
+      ? Math.round((a.buyPnlIfStillHeld / a.buyAmt) * 10000) / 100
+      : null,
+    notes: a.notes,
+  }));
+
+  // sellTrades: apply the same symbol/tag filters as bySymbol, chronological by default;
+  // when sort_by targets P&L, reorder the same way
+  let sellTradesOut = sellTrades.filter((t) => matchesSymbol(t.symbol) && matchesTag(t.symbol));
+  if (args.sort_by === "realizedPnl") {
+    sellTradesOut.sort((a, b) => b.realizedPnl - a.realizedPnl); // best first
+  } else if (args.sort_by === "lossAmt") {
+    sellTradesOut.sort((a, b) => a.realizedPnl - b.realizedPnl); // worst first
+  }
+
+  if (args.top_n && args.top_n > 0) {
+    bySymbolOut = bySymbolOut.slice(0, args.top_n);
+    sellTradesOut = sellTradesOut.slice(0, args.top_n);
+  }
+
+  // byTag: sector/theme rollup. A symbol can carry multiple tags, so a single trade may land in
+  // several buckets — tag totals will not sum to `summary` and that's expected, not a bug.
+  const byTag = [...tagMap.values()]
+    .sort((a, b) => (b.buyAmt + b.sellAmt) - (a.buyAmt + a.sellAmt))
+    .map((t) => ({
+      tag: t.tag,
+      symbolCount: t.symbols.size,
+      bought: t.buyCount > 0
+        ? { times: t.buyCount, qty: Math.round(t.buyQty), amount: Math.round(t.buyAmt) }
+        : null,
+      sold: t.sellCount > 0
+        ? { times: t.sellCount, qty: Math.round(t.sellQty), amount: Math.round(t.sellAmt) }
+        : null,
+      realizedPnl: t.realizedPnl != null ? Math.round(t.realizedPnl) : null,
+      buyPnlIfStillHeld: t.buyPnlIfStillHeld != null ? Math.round(t.buyPnlIfStillHeld) : null,
+      buyPnlIfStillHeldPct: t.buyPnlIfStillHeld != null && t.buyAmt > 0
+        ? Math.round((t.buyPnlIfStillHeld / t.buyAmt) * 10000) / 100
+        : null,
+    }));
 
   return {
     period: { from: fmtDate(from), to: fmtDate(to) },
-    filters: { pnl_filter: pnlFilter, symbol: args.symbol ?? null },
+    filters: {
+      pnl_filter: pnlFilter, symbol: args.symbol ?? null, account: args.account ?? null, tag: args.tag ?? null,
+      sort_by: args.sort_by ?? null, top_n: args.top_n ?? null,
+    },
     summary: {
       totalTransactions: periodTxs.length,
       totalBuyAmt: Math.round(totalBuyAmt),
       totalSellAmt: Math.round(totalSellAmt),
       totalRealizedPnl: Math.round(totalRealizedPnl),
       symbolsTraded: [...symMap.values()].length,
-      matchedSymbols: activities.length,
+      matchedSymbols: matchedCount,
     },
-    bySymbol: activities
-      .map((a) => ({
-        symbol: a.symbol,
-        name: a.name,
-        bought: a.buyCount > 0
-          ? { times: a.buyCount, qty: Math.round(a.buyQty), amount: Math.round(a.buyAmt) }
-          : null,
-        sold: a.sellCount > 0
-          ? { times: a.sellCount, qty: Math.round(a.sellQty), amount: Math.round(a.sellAmt) }
-          : null,
-        realizedPnl: a.realizedPnl != null ? Math.round(a.realizedPnl) : null,
-        notes: a.notes,
-      })),
-    allTransactions: periodTxs.map((t) => ({
-      date: fmtDate(t.date),
-      type: t.type,
-      account: t.account.name,
-      symbol: t.instrument?.symbol ?? null,
-      name: t.instrument?.name ?? null,
-      qty: toNum(t.quantity),
-      price: toNum(t.price),
-      fee: toNum(t.fee),
-      tax: toNum(t.tax),
-      note: t.note ?? null,
-    })),
+    bySymbol: bySymbolOut,
+    sellTrades: sellTradesOut,
+    byTag,
+    ...(args.include_transactions ? { allTransactions: allTransactionsOut } : {}),
   };
 }
 
@@ -467,7 +650,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_trading_review",
       description:
-        "回顧指定期間的交易活動，包含每筆交易明細、每個標的的買賣次數與金額、已實現損益，以及交易備註。適合用於週/月操作複盤。",
+        "回顧指定期間的交易活動，包含每個標的的買賣次數與金額、已實現損益、進場品質（該標的在此期間買進的部分，假設到現在都沒賣掉會是賺是賠）、每一筆賣出交易的逐筆損益與持有天數、依帳戶或族群（tag）分類的統計，以及交易備註。適合用於週/月操作複盤，例如找出買最多的標的、賣最多的標的、進場點最差的標的、虧損最大的止損交易，或看某個帳戶/某個族群的操作表現。預設不含完整逐筆交易明細（allTransactions）以避免輸出過大，需要時用 include_transactions 開啟。",
       inputSchema: {
         type: "object",
         properties: {
@@ -479,9 +662,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           date_to: { type: "string", description: "結束日期 YYYY-MM-DD" },
           pnl_filter: {
             type: "string",
-            description: "已實現損益篩選：loss（只看虧損，由大到小）、profit（只看獲利，由高到低）、realized（所有有實現損益的標的）、all（全部，預設）",
+            description: "已實現損益篩選（依標的加總）：loss（只看虧損，由大到小）、profit（只看獲利，由高到低）、realized（所有有實現損益的標的）、all（全部，預設）",
           },
           symbol: { type: "string", description: "只看特定代號（部分比對），例如 '2330'" },
+          account: { type: "string", description: "只看特定帳戶（部分比對），例如 '永豐'、'Firstrade'、'Binance'。會連同期初成本的計算範圍一起限縮在該帳戶" },
+          tag: { type: "string", description: "只看特定族群/類別標籤（部分比對），例如 '被動元件'、'光'、'TGV'。同一標的可能有多個標籤" },
+          sort_by: {
+            type: "string",
+            description: "排序依據：buyAmt（買進金額由高到低）、sellAmt（賣出金額由高到低）、realizedPnl（已實現獲利由高到低）、lossAmt（已實現虧損由大到小，即止損排行）、buyPnl（進場品質金額由高到低，即該標的這期間買的部分假設沒賣現在賺最多排前面）、buyLossAmt（進場品質虧損金額由大到小，即進場點最差排行，用金額）、buyLossPct（進場品質報酬率由低到高，即進場點最差排行，用百分比）。同時套用在 bySymbol 與 sellTrades 兩份清單上（buyPnl/buyLossAmt/buyLossPct 只影響 bySymbol）。不指定則維持預設排序",
+          },
+          top_n: { type: "number", description: "只回傳排序後前 N 筆（同時套用在 bySymbol 與 sellTrades），例如 10 代表只看前10名" },
+          include_transactions: { type: "boolean", description: "是否回傳完整逐筆交易明細 allTransactions（預設 false，避免長區間查詢時輸出過大超出限制）" },
         },
       },
     },
@@ -503,7 +694,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     } else if (name === "get_portfolio_summary") {
       result = await getPortfolioSummary();
     } else if (name === "get_trading_review") {
-      result = await getTradingReview(args as { period?: string; date_from?: string; date_to?: string; pnl_filter?: "loss" | "profit" | "realized" | "all"; symbol?: string });
+      result = await getTradingReview(args as {
+        period?: string; date_from?: string; date_to?: string;
+        pnl_filter?: "loss" | "profit" | "realized" | "all"; symbol?: string;
+        account?: string; tag?: string;
+        sort_by?: "buyAmt" | "sellAmt" | "realizedPnl" | "lossAmt" | "buyPnl" | "buyLossAmt" | "buyLossPct";
+        top_n?: number; include_transactions?: boolean;
+      });
     } else {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }

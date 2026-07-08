@@ -135,6 +135,8 @@ export function TransactionRow({
         alert(err.error ?? "儲存失敗");
         return;
       }
+      const updated = (await res.json()) as { warning?: string | null };
+      if (updated.warning) alert(updated.warning);
       onCancelEdit();
       onSaved();
     } finally {

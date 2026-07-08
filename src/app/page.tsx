@@ -1,5 +1,5 @@
-import { DashboardPageClient } from "@/components/portfolio/dashboard-page-client";
+import { OverviewPageClient } from "@/components/portfolio/overview-page-client";
 
-export default function DashboardPage() {
-  return <DashboardPageClient />;
+export default function OverviewPage() {
+  return <OverviewPageClient />;
 }

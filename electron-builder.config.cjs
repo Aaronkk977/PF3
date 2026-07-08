@@ -49,5 +49,8 @@ module.exports = {
     provider: "github",
     owner: "Aaronkk977",
     repo: "PF3",
+    // 預設會建成草稿（對外不可見），改成直接發布，
+    // 這樣 tag push 後朋友端的 electron-updater 才抓得到新版。
+    draft: false,
   },
 };

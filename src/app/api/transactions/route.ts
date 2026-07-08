@@ -3,6 +3,7 @@ import { getOrCreateAccount, reconcileAccountCash } from "@/lib/accounts";
 import { prisma } from "@/lib/db";
 import { invalidatePerformanceCache } from "@/lib/performance-cache";
 import { parseCalendarDate, toTransactionDateKey } from "@/lib/date-keys";
+import { checkSellExceedsHolding, getHeldQuantity } from "@/lib/position-check";
 import { toNumber } from "@/lib/utils";
 
 const CASH_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
@@ -116,6 +117,12 @@ export async function POST(request: NextRequest) {
   const finalFee = Number(fee) || 0;
   const finalTax = Number(tax) || 0;
 
+  let warning: string | null = null;
+  if (txType === "SELL") {
+    const held = await getHeldQuantity(account.id, instrument.id);
+    warning = checkSellExceedsHolding(txType, qty, held);
+  }
+
   const transaction = await prisma.transaction.create({
     data: {
       accountId: account.id,
@@ -133,5 +140,5 @@ export async function POST(request: NextRequest) {
 
   await reconcileAccountCash(account.id);
   await invalidatePerformanceCache();
-  return NextResponse.json(transaction, { status: 201 });
+  return NextResponse.json({ ...transaction, warning }, { status: 201 });
 }

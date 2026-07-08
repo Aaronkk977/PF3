@@ -5,12 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageSection } from "@/components/layout/page-sections";
 import { DashboardClock } from "@/components/portfolio/dashboard-clock";
 import { HoldingsDayChange } from "@/components/portfolio/holdings-day-change";
-import { StatCard } from "@/components/portfolio/stat-card";
 import { SymbolSearchInput } from "@/components/portfolio/symbol-search-input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import type { HoldingPosition, PortfolioSummary } from "@/lib/portfolio-engine";
+import type { HoldingPosition } from "@/lib/portfolio-engine";
 import {
   mergeInstrumentSuggestions,
   type InstrumentSuggestion,
@@ -35,12 +33,6 @@ import {
   PAGE_CACHE_KEYS,
   patchClientCache,
 } from "@/lib/client-data-cache";
-import {
-  changePositive,
-  changePositiveMoney,
-  formatCurrency,
-  formatPercent,
-} from "@/lib/utils";
 
 async function fetchWatchlists(): Promise<WatchlistWithEntries[]> {
   const res = await fetch("/api/watchlist");
@@ -53,14 +45,12 @@ type Instrument = { id: string; symbol: string; name: string | null };
 /** 新增清單橢圓輸入框的最小寬度（約等於「+」圓鈕 pill 的觀感起點） */
 const NEW_LIST_MIN_WIDTH = 88;
 
-export function DashboardClient({
-  summary,
+export function MarketClient({
   holdings,
   watchlists: initialWatchlists,
   instruments,
   priorityInstruments,
 }: {
-  summary: PortfolioSummary;
   holdings: HoldingPosition[];
   watchlists: WatchlistWithEntries[];
   instruments: Instrument[];
@@ -481,73 +471,17 @@ export function DashboardClient({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-mono text-2xl font-bold text-[var(--color-primary)] glow-text">
-            Dashboard
+            Market
           </h1>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">投資組合總覽</p>
+          <p className="mt-1 text-sm text-[var(--color-muted)]">
+            追蹤清單與市場觀察
+          </p>
         </div>
         <DashboardClock />
       </div>
 
-      <PageSection id="dashboard-overview" title="總覽" navOrder={10}>
-      <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,10.5rem),1fr))]">
-        <StatCard
-          title="總資產"
-          value={summary.totalMarketValue + summary.cash}
-          isCurrency
-          currency={summary.baseCurrency}
-        />
-        <StatCard
-          title="證券市值"
-          value={summary.totalMarketValue}
-          isCurrency
-          currency={summary.baseCurrency}
-        />
-        <StatCard
-          title="現金"
-          value={summary.cash}
-          isCurrency
-          currency={summary.baseCurrency}
-        />
-        <StatCard
-          title="今日漲跌"
-          value={summary.todayChange}
-          isCurrency
-          currency={summary.baseCurrency}
-          positive={changePositiveMoney(summary.todayChange)}
-          subtitle={formatPercent(summary.todayChangePct)}
-          animated
-        />
-        <StatCard
-          title="未實現損益"
-          value={summary.totalUnrealizedPnl}
-          isCurrency
-          currency={summary.baseCurrency}
-          positive={changePositiveMoney(summary.totalUnrealizedPnl)}
-          subtitle={formatPercent(summary.totalUnrealizedPnlPct)}
-        />
-      </div>
-      </PageSection>
-
-      {(summary.accountSummaries ?? []).length > 0 && (
-        <PageSection id="dashboard-accounts" title="各帳戶表現" className="mt-8" navOrder={20}>
-          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,10.5rem),1fr))]">
-            {(summary.accountSummaries ?? []).map((acc) => (
-              <StatCard
-                key={acc.accountId}
-                title={acc.name}
-                value={acc.totalAssets}
-                isCurrency
-                currency={summary.baseCurrency}
-                subtitle={`今日 ${formatCurrency(acc.todayChange, summary.baseCurrency)} (${formatPercent(acc.todayChangePct)})`}
-                positive={changePositive(acc.todayChangePct)}
-              />
-            ))}
-          </div>
-        </PageSection>
-      )}
-
       <div className="mt-8 grid gap-6 xl:grid-cols-2">
-      <PageSection id="dashboard-watchlist" title="追蹤清單" navOrder={30}>
+      <PageSection id="market-watchlist" title="追蹤清單" navOrder={10}>
         <Card className="h-full">
           <CardHeader className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -732,7 +666,7 @@ export function DashboardClient({
         </Card>
       </PageSection>
 
-      <PageSection id="dashboard-day-change" title="本日持倉表現" navOrder={40}>
+      <PageSection id="market-day-change" title="本日持倉表現" navOrder={20}>
         <Card className="h-full">
           <CardHeader>
             <CardTitle>本日持倉表現</CardTitle>

@@ -5,6 +5,7 @@ import { applyAutoFeeTax } from "@/lib/fee-tax";
 import { inferInstrumentCurrency } from "@/lib/instrument-currency";
 import { parseCalendarDate } from "@/lib/date-keys";
 import { invalidatePerformanceCache } from "@/lib/performance-cache";
+import { checkSellExceedsHolding, getHeldQuantity } from "@/lib/position-check";
 
 const CASH_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
 
@@ -109,6 +110,12 @@ export async function PATCH(
         tax: Number(body.tax ?? existing.tax) || 0,
       };
 
+  let warning: string | null = null;
+  if (txType === "SELL") {
+    const held = await getHeldQuantity(accountId, instrument.id, id);
+    warning = checkSellExceedsHolding(txType, qty, held);
+  }
+
   const updated = await prisma.transaction.update({
     where: { id },
     data: {
@@ -130,7 +137,7 @@ export async function PATCH(
     await reconcileAccountCash(existing.accountId);
   }
   await invalidatePerformanceCache();
-  return NextResponse.json(updated);
+  return NextResponse.json({ ...updated, warning });
 }
 
 export async function DELETE(

@@ -565,6 +565,30 @@ export function TransactionsClient({
     resolvedSymbol ??
     (symbolInputRaw ? normalizeSymbolInput(symbolInputRaw) : "");
 
+  /** 目前表單所選帳戶＋標的的持有股數（依已載入的交易紀錄加總，BUY 為正、SELL 為負） */
+  const currentHeldQty = useMemo(() => {
+    if (isCashFlow || !effectiveSymbol || !form.accountId) return null;
+    const sym = effectiveSymbol.toUpperCase();
+    let qty = 0;
+    for (const t of transactions) {
+      if (t.accountId !== form.accountId) continue;
+      if ((t.symbol ?? "").toUpperCase() !== sym) continue;
+      if (t.type === "BUY") qty += t.quantity;
+      else if (t.type === "SELL") qty -= t.quantity;
+    }
+    return qty;
+  }, [transactions, form.accountId, effectiveSymbol, isCashFlow]);
+
+  /** 賣出數量超過目前持有股數時的警告文字；否則為 null */
+  const sellExceedsHoldingWarning = useMemo(() => {
+    if (form.type !== "SELL" || currentHeldQty == null) return null;
+    const qty = parseFloat(form.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+    if (qty <= currentHeldQty + 1e-7) return null;
+    const overBy = qty - currentHeldQty;
+    return `目前持有 ${currentHeldQty.toLocaleString("zh-TW")} 股，這筆賣出 ${qty.toLocaleString("zh-TW")} 股將超賣 ${overBy.toLocaleString("zh-TW")} 股`;
+  }, [form.type, form.quantity, currentHeldQty]);
+
   useEffect(() => {
     if (isCashFlow || !effectiveSymbol || !form.date) return;
 
@@ -663,6 +687,12 @@ export function TransactionsClient({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (
+      sellExceedsHoldingWarning &&
+      !window.confirm(`${sellExceedsHoldingWarning}\n\n確定要繼續新增這筆交易嗎？`)
+    ) {
+      return;
+    }
     setLoading(true);
     try {
       const payload: Record<string, unknown> = {
@@ -694,7 +724,9 @@ export function TransactionsClient({
       }
       const created = (await res.json()) as {
         instrument?: { name?: string | null } | null;
+        warning?: string | null;
       };
+      if (created.warning) alert(created.warning);
       if (!isCashFlow && effectiveSymbol) {
         const sym = effectiveSymbol.toUpperCase();
         const fromServer = created.instrument?.name;
@@ -1003,6 +1035,12 @@ export function TransactionsClient({
                   onChange={(e) => setForm({ ...form, note: e.target.value })}
                 />
               </div>
+
+              {sellExceedsHoldingWarning && (
+                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200/90">
+                  ⚠ {sellExceedsHoldingWarning}
+                </p>
+              )}
 
               {settlement && (
                 <div className="rounded-lg border border-[var(--color-card-border)]/60 bg-[var(--color-card-border)]/10 p-4 space-y-2">

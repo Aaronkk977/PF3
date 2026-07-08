@@ -45,6 +45,8 @@ export type PortfolioSummary = {
   allocationByAssetClass: { name: string; value: number; pct: number }[];
   allocationByTag: { name: string; value: number; pct: number }[];
   allocationByHolding: { name: string; value: number; pct: number }[];
+  /** 有一檔以上的持倉這次抓不到即時報價，畫面上顯示的是舊快取價格 */
+  quotesStale: boolean;
 };
 
 type TxRow = {
@@ -211,6 +213,7 @@ export async function getHoldings(): Promise<HoldingPosition[]> {
       dayChangePct: quote?.changePercent ?? null,
       dayChange,
       previousClose: quote?.previousClose ?? null,
+      quoteStale: quote?.stale ?? false,
       tags: inst.tags.map((t) => t.tag.name),
       weight: 0,
       accountIds,
@@ -373,6 +376,7 @@ export async function getPortfolioSummary(
     allocationByAssetClass: toAllocation(byClass),
     allocationByTag: toAllocation(byTag),
     allocationByHolding,
+    quotesStale: holdings.some((h) => h.quoteStale),
   };
 }
 

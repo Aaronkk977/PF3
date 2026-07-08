@@ -75,3 +75,53 @@ jobs:
           # NSIS 差異更新模式的壓縮是單執行緒 LZMA，runner 單核跑 mx=9 要 40 分鐘以上
           # （多次撞上 timeout）。降到 mx=4 實測快 6.5 倍，安裝檔僅大 13%（~250MB）。
           ELECTRON_BUILDER_COMPRESSION_LEVEL: "4"
+
+      - name: Merge duplicate release drafts (electron-builder publish race)
+        # electron-builder 併發上傳多個檔案（exe / blockmap / latest.yml）到
+        # GitHub 時，偶爾會各自誤判「這個 tag 還沒有 release」而各建一個，
+        # 導致同一個 tag 底下出現兩個草稿、檔案被拆開（實測 v0.1.7 發生過一次）。
+        # 這一步把同 tag 底下所有 release 的資產合併進一個，其餘刪除，最後確保發布。
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          repo="${{ github.repository }}"
+          tag="${{ github.ref_name }}"
+
+          ids=$(gh api "repos/$repo/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\") | .id")
+          count=$(echo "$ids" | grep -c . || true)
+          echo "Found $count release(s) for tag $tag"
+
+          canonical=$(gh api "repos/$repo/releases" --paginate --jq ".[] | select(.tag_name==\"$tag\" and .draft==false) | .id" | head -n1)
+          if [ -z "$canonical" ]; then
+            canonical=$(echo "$ids" | head -n1)
+          fi
+          echo "Canonical release id: $canonical"
+
+          if [ "$count" -gt 1 ]; then
+            existing_names=$(gh api "repos/$repo/releases/$canonical/assets" --jq '.[].name')
+            tmpdir=$(mktemp -d)
+            for id in $ids; do
+              if [ "$id" = "$canonical" ]; then continue; fi
+              echo "Merging assets from duplicate release $id into $canonical"
+              gh api "repos/$repo/releases/$id/assets" --jq '.[] | [(.id|tostring), .name] | @tsv' | while IFS=$'\t' read -r assetId assetName; do
+                [ -z "$assetId" ] && continue
+                if echo "$existing_names" | grep -qxF "$assetName"; then
+                  echo "  skip $assetName (already present on canonical)"
+                  continue
+                fi
+                echo "  moving $assetName"
+                gh api "repos/$repo/releases/assets/$assetId" -H "Accept: application/octet-stream" > "$tmpdir/$assetName"
+                gh api --method POST -H "Content-Type: application/octet-stream" \
+                  "repos/$repo/releases/$canonical/assets?name=$assetName" \
+                  --input "$tmpdir/$assetName" > /dev/null
+              done
+              echo "Deleting duplicate release $id"
+              gh api --method DELETE "repos/$repo/releases/$id"
+            done
+            rm -rf "$tmpdir"
+          fi
+
+          gh api --method PATCH "repos/$repo/releases/$canonical" -f draft=false > /dev/null
+          echo "Release $tag is published (release id $canonical)"

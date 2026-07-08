@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { CloudOff } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 
@@ -46,6 +47,8 @@ export function StatCard({
   invertDisplay,
   neutral,
   animated = false,
+  stale = false,
+  staleTitle,
 }: {
   title: string;
   value: number;
@@ -60,6 +63,9 @@ export function StatCard({
   neutral?: boolean;
   /** 數值變化時動畫過渡 */
   animated?: boolean;
+  /** 報價來源本次抓取失敗，數值為舊快取；標題旁顯示小圖示提示 */
+  stale?: boolean;
+  staleTitle?: string;
 }) {
   const animatedValue = useAnimatedNumber(value);
   const displayValue = animated ? animatedValue : value;
@@ -84,7 +90,17 @@ export function StatCard({
   return (
     <Card className="h-full min-w-0">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">{title}</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm">
+          {title}
+          {stale && (
+            <span
+              className="inline-flex shrink-0"
+              title={staleTitle ?? "報價來源暫時無法連線，顯示為快取價格"}
+            >
+              <CloudOff className="h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden />
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <p

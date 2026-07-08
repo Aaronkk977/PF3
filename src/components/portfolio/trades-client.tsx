@@ -26,6 +26,12 @@ import {
 } from "@/lib/trades-report";
 import { encodeSymbol } from "@/lib/utils";
 import {
+  PAGE_CACHE_KEYS,
+  patchClientCache,
+  readClientCache,
+  writeClientCache,
+} from "@/lib/client-data-cache";
+import {
   changePositiveMoney,
   changeToneClass,
   cn,
@@ -56,6 +62,20 @@ type TradeSortKey =
   | "irr";
 
 type SortDir = "asc" | "desc";
+
+/** 上次成功查詢的完整畫面快照，讓返回此頁時能立即還原內容（避免因非同步重新
+ * 抓取資料導致頁面短暫變矮，讓全域捲動位置還原機制抓不到正確高度）。 */
+type TradesCacheSnapshot = {
+  start: string;
+  end: string;
+  accountIds: string[];
+  granularity: TradesPeriodGranularity;
+  report: TradesReport;
+  settingsExpanded: boolean;
+  sortKey: TradeSortKey | null;
+  sortDir: SortDir | null;
+  pnlFilter: PnlFilter;
+};
 
 const GRANULARITY_OPTIONS: {
   value: TradesPeriodGranularity;
@@ -101,30 +121,51 @@ export function TradesClient({
   portfolioEarliest: string;
 }) {
   const chartTheme = useChartTheme();
-  const [start, setStart] = useState(defaultStart);
-  const [end, setEnd] = useState(defaultEnd);
-  const [granularity, setGranularity] =
-    useState<TradesPeriodGranularity>("month");
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() =>
-    accounts.map((a) => a.id),
+  const [cached] = useState<TradesCacheSnapshot | null>(() =>
+    readClientCache<TradesCacheSnapshot>(PAGE_CACHE_KEYS.trades),
   );
-  const [report, setReport] = useState<TradesReport | null>(null);
+  const [start, setStart] = useState(cached?.start ?? defaultStart);
+  const [end, setEnd] = useState(cached?.end ?? defaultEnd);
+  const [granularity, setGranularity] = useState<TradesPeriodGranularity>(
+    cached?.granularity ?? "month",
+  );
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() => {
+    const cachedIds = cached?.accountIds?.filter((id) =>
+      accounts.some((a) => a.id === id),
+    );
+    if (cachedIds?.length) return cachedIds;
+    return accounts.map((a) => a.id);
+  });
+  const [report, setReport] = useState<TradesReport | null>(
+    cached?.report ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pnlFilter, setPnlFilter] = useState<PnlFilter>("all");
-  const [settingsExpanded, setSettingsExpanded] = useState(true);
+  const [pnlFilter, setPnlFilter] = useState<PnlFilter>(
+    cached?.pnlFilter ?? "all",
+  );
+  const [settingsExpanded, setSettingsExpanded] = useState(
+    cached?.settingsExpanded ?? true,
+  );
   const [customPeriodPresets, setCustomPeriodPresets] = useState<
     PerformancePeriodPreset[]
   >([]);
   const [activePeriodPresetId, setActivePeriodPresetId] = useState<
     string | null
   >(null);
-  const [sortKey, setSortKey] = useState<TradeSortKey | null>("date");
-  const [sortDir, setSortDir] = useState<SortDir | null>("desc");
+  const [sortKey, setSortKey] = useState<TradeSortKey | null>(
+    cached?.sortKey ?? "date",
+  );
+  const [sortDir, setSortDir] = useState<SortDir | null>(
+    cached?.sortDir ?? "desc",
+  );
 
   useEffect(() => {
     const prefs = loadPerformancePrefs();
     setCustomPeriodPresets(loadCustomPeriodPresets(prefs));
+    // 若已經有本頁的快照，代表 start/end/accountIds 已經是使用者上次實際查詢
+    // 的精確狀態，比泛用的 performance 頁偏好設定更準確，不要覆蓋掉。
+    if (cached) return;
     if (prefs?.start) setStart(prefs.start);
     if (prefs?.end) setEnd(prefs.end);
     if (prefs?.accountIds?.length) {
@@ -133,7 +174,7 @@ export function TradesClient({
       );
       if (valid.length > 0) setSelectedAccountIds(valid);
     }
-  }, [accounts]);
+  }, [accounts, cached]);
 
   const load = useCallback(async () => {
     if (selectedAccountIds.length === 0) {
@@ -163,18 +204,40 @@ export function TradesClient({
       }
       setReport(json);
       setSettingsExpanded(false);
+      writeClientCache<TradesCacheSnapshot>(PAGE_CACHE_KEYS.trades, {
+        start: normalized.start,
+        end: normalized.end,
+        accountIds: selectedAccountIds,
+        granularity,
+        report: json,
+        settingsExpanded: false,
+        sortKey,
+        sortDir,
+        pnlFilter,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "載入失敗");
       setReport(null);
     } finally {
       setLoading(false);
     }
-  }, [start, end, selectedAccountIds, granularity]);
+  }, [start, end, selectedAccountIds, granularity, sortKey, sortDir, pnlFilter]);
 
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only
   }, []);
+
+  // 排序／篩選／設定面板展開狀態不會觸發重新查詢，但離開頁面前也一併存進
+  // 快照，讓返回時完全還原上次畫面（僅在已有查詢結果的快照時才更新）。
+  useEffect(() => {
+    patchClientCache<TradesCacheSnapshot>(PAGE_CACHE_KEYS.trades, {
+      sortKey,
+      sortDir,
+      pnlFilter,
+      settingsExpanded,
+    });
+  }, [sortKey, sortDir, pnlFilter, settingsExpanded]);
 
   const applyPeriodRange = useCallback(
     (range: { start: string; end: string }, presetId: string | null) => {
@@ -258,15 +321,6 @@ export function TradesClient({
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="font-mono text-2xl font-bold tracking-tight text-[var(--color-primary)]">
-          Trades
-        </h1>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">
-          檢視期間內的手續費、稅與逐筆實現損益（FIFO 價差；手續費與稅另列）
-        </p>
-      </div>
-
       <PageSection id="trades-settings" title="設定" navOrder={10}>
         <CollapsibleCard
           title="查詢設定"

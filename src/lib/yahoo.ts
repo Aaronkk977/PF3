@@ -60,6 +60,8 @@ export type QuoteResult = {
   changePercent?: number;
   /** 昨收（台股漲停／收盤價校正用） */
   previousClose?: number;
+  /** 即時報價來源（Yahoo）本次呼叫失敗，此結果為本機快取的舊價 */
+  stale?: boolean;
 };
 
 export type OhlcBar = {
@@ -802,7 +804,7 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
     if (!quote) {
       const fallback = await fromChartOrCache();
       const base = fallback ?? { symbol, price: cached ?? 0 };
-      return applyTaiwanQuoteClose(symbol, base, undefined);
+      return applyTaiwanQuoteClose(symbol, { ...base, stale: true }, undefined);
     }
     const price = extractYahooPrice(quote) || cached || 0;
     let change = quote.regularMarketChange ?? undefined;
@@ -859,8 +861,10 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
     );
   } catch {
     const fallback = await fromChartOrCache();
-    if (fallback) return applyTaiwanQuoteClose(symbol, fallback, undefined);
-    return { symbol, price: 0 };
+    if (fallback) {
+      return applyTaiwanQuoteClose(symbol, { ...fallback, stale: true }, undefined);
+    }
+    return { symbol, price: 0, stale: true };
   }
 }
 
@@ -872,7 +876,7 @@ export async function getQuotes(symbols: string[]): Promise<Map<string, QuoteRes
         map.set(symbol, await getQuote(symbol));
       } catch {
         const cached = await getLatestCachedClose(symbol);
-        map.set(symbol, { symbol, price: cached ?? 0 });
+        map.set(symbol, { symbol, price: cached ?? 0, stale: true });
       }
     }),
   );

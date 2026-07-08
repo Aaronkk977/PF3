@@ -114,6 +114,10 @@ export function prefetchPage(cacheKey: string, url: string): void {
 }
 
 export const NAV_PREFETCH: Record<string, { cacheKey: string; url: string }> = {
+  "/market": {
+    cacheKey: PAGE_CACHE_KEYS.dashboard,
+    url: "/api/portfolio/dashboard",
+  },
   "/holdings": {
     cacheKey: PAGE_CACHE_KEYS.holdings,
     url: "/api/portfolio/holdings-page",

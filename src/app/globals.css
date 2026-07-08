@@ -345,6 +345,19 @@ html:not([data-theme]) body::before {
   }
 }
 
+@keyframes gear-spin-once {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-gear-spin-once {
+  animation: gear-spin-once 0.5s ease-in-out;
+}
+
 @keyframes tw-limit-up-halo {
   0%,
   100% {

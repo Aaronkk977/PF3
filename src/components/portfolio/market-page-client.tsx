@@ -2,16 +2,20 @@
 
 import { useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { DashboardClient } from "@/components/portfolio/dashboard-client";
+import { MarketClient } from "@/components/portfolio/market-client";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";
 import { PageSkeleton } from "@/components/ui/page-skeleton";
 import { useCachedPageData } from "@/hooks/use-cached-page-data";
 import type { HoldingPosition, PortfolioSummary } from "@/lib/portfolio-engine";
 import type { InstrumentSuggestion } from "@/lib/instrument-suggestions";
 import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
-import { prefetchPerformanceWarm, prefetchSiblingPages } from "@/lib/prefetch-page-data";
+import {
+  prefetchPerformanceWarm,
+  prefetchSiblingPages,
+} from "@/lib/prefetch-page-data";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
 
+/** 與 Overview 頁共用 /api/portfolio/dashboard 的快取（同一 cache key）。 */
 type DashboardPayload = {
   summary: PortfolioSummary;
   holdings: HoldingPosition[];
@@ -20,7 +24,7 @@ type DashboardPayload = {
   priorityInstruments: InstrumentSuggestion[];
 };
 
-export function DashboardPageClient() {
+export function MarketPageClient() {
   const pathname = usePathname();
   const { data, refreshing, error, isPending, refresh } =
     useCachedPageData<DashboardPayload>(
@@ -36,10 +40,10 @@ export function DashboardPageClient() {
   }, [data]);
 
   useEffect(() => {
-    if (pathname === "/") void refresh();
+    if (pathname === "/market") void refresh();
   }, [pathname, refresh]);
 
-  if (isPending) return <PageSkeleton title="Dashboard" />;
+  if (isPending) return <PageSkeleton title="Market" />;
   if (error && !data) {
     return (
       <p className="text-sm text-[var(--color-negative)]">
@@ -54,13 +58,12 @@ export function DashboardPageClient() {
       </p>
     );
   }
-  if (!data) return <PageSkeleton title="Dashboard" />;
+  if (!data) return <PageSkeleton title="Market" />;
 
   return (
     <>
       <PageRefreshBanner refreshing={refreshing} />
-      <DashboardClient
-        summary={data.summary}
+      <MarketClient
         holdings={data.holdings}
         watchlists={data.watchlists}
         instruments={data.instruments}

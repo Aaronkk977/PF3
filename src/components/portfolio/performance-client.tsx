@@ -12,7 +12,6 @@ import { PerformancePeriodPresets } from "@/components/portfolio/performance-per
 import type { BenchmarkRecord } from "@/lib/benchmarks";
 import type { DrawdownPoint } from "@/lib/metrics";
 import type { BenchmarkComparison } from "@/lib/performance";
-import { StatCard } from "@/components/portfolio/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CollapsibleCard } from "@/components/ui/collapsible-card";
@@ -42,17 +41,6 @@ import { useChartTheme } from "@/hooks/use-chart-theme";
 import { resolveAccountSwatchColor } from "@/lib/chart-palette";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";
 import { changePositive, formatPercent, isFlatChange } from "@/lib/utils";
-
-type TodayChangeBreakdown = {
-  overall: { change: number; changePct: number; marketValue: number };
-  accounts: {
-    accountId: string;
-    name: string;
-    change: number;
-    changePct: number;
-    marketValue: number;
-  }[];
-};
 
 type AccountOption = {
   id: string;
@@ -164,8 +152,6 @@ export function PerformanceClient({
   const [cacheHint, setCacheHint] = useState<string | null>(null);
   const initialBgLoadDone = useRef(false);
   const [prefsReady, setPrefsReady] = useState(false);
-  const [todayBreakdown, setTodayBreakdown] =
-    useState<TodayChangeBreakdown | null>(null);
   const [customPeriodPresets, setCustomPeriodPresets] = useState<
     PerformancePeriodPreset[]
   >([]);
@@ -282,17 +268,6 @@ export function PerformanceClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init local prefs once on mount
   }, []);
 
-  useEffect(() => {
-    void fetch("/api/portfolio/today-change")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (json?.overall) setTodayBreakdown(json as TodayChangeBreakdown);
-      })
-      .catch(() => {});
-  }, []);
-
-  const [todayLoading, setTodayLoading] = useState(false);
-
   const persistPeriodPrefs = useCallback(
     (
       patch: Partial<{
@@ -363,18 +338,6 @@ export function PerformanceClient({
     },
     [persistPeriodPrefs],
   );
-
-  const refreshToday = useCallback(async () => {
-    setTodayLoading(true);
-    try {
-      const res = await fetch("/api/portfolio/today-change");
-      if (!res.ok) return;
-      const json = await res.json();
-      if (json?.overall) setTodayBreakdown(json as TodayChangeBreakdown);
-    } finally {
-      setTodayLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     if (!prefsReady) return;
@@ -538,57 +501,11 @@ export function PerformanceClient({
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="font-mono text-2xl font-bold text-[var(--color-primary)] glow-text">
-          Performance
-        </h1>
-        <p className="mt-1 text-sm text-[var(--color-muted)]">期間績效與基準比較</p>
-        {cacheHint && (
-          <p className="mt-1 text-xs text-[var(--color-muted)]">{cacheHint}</p>
-        )}
-      </div>
+      {cacheHint && (
+        <p className="text-xs text-[var(--color-muted)]">{cacheHint}</p>
+      )}
 
       <PageRefreshBanner refreshing={bgRefreshing} />
-
-      <PageSection id="performance-today" title="今日漲跌" navOrder={0}>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
-              今日漲跌
-            </p>
-            <div>
-              <Button size="sm" variant="ghost" onClick={refreshToday} disabled={todayLoading}>
-                {todayLoading ? "更新中…" : "更新今日漲跌"}
-              </Button>
-            </div>
-          </div>
-          {todayBreakdown ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                title="整體組合"
-                value={todayBreakdown.overall.change}
-                isCurrency
-                positive={changePositive(todayBreakdown.overall.changePct)}
-                subtitle={formatPercent(todayBreakdown.overall.changePct)}
-                invertDisplay
-              />
-              {todayBreakdown.accounts.map((row) => (
-                <StatCard
-                  key={row.accountId}
-                  title={row.name}
-                  value={row.change}
-                  isCurrency
-                  positive={changePositive(row.changePct)}
-                  subtitle={formatPercent(row.changePct)}
-                  invertDisplay
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[var(--color-muted)]">載入今日漲跌中…</p>
-          )}
-        </div>
-      </PageSection>
 
       <PageSection id="performance-period" title="設定" className="mt-8" navOrder={10}>
         <CollapsibleCard
