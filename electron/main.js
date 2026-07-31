@@ -9,10 +9,14 @@ const { runMigrations } = require("./migrate");
 const PORT = 3847;
 const HOSTNAME = "127.0.0.1";
 const BASE_URL = `http://${HOSTNAME}:${PORT}`;
-const HEALTH_TIMEOUT_MS = 60_000;
+// 涵蓋「等 server process 活著」+「等開機維護（股票分割偵測＋幣別／
+// 追蹤清單名稱校正）跑完」兩段，維護第一次跑（或冷卻到期後）可能要等
+// 外部 API，時間拉長一點比較保險。
+const HEALTH_TIMEOUT_MS = 120_000;
 
 let serverProcess = null;
 let mainWindow = null;
+let splashWindow = null;
 
 // 對齊既有 launcher/start.ps1 使用的 %APPDATA%\PortfolioPerformance，
 // 不依賴 Electron 預設 userData 命名，確保沿用舊版使用者的既有資料。
@@ -85,6 +89,43 @@ function startNextServer(env) {
   });
 }
 
+/** 開機一開始就先顯示的等待畫面：伺服器行程／開機維護（股票分割偵測＋
+ *  幣別／追蹤清單名稱校正）跑完前，這是使用者唯一看得到的畫面，取代原本
+ *  「什麼都不顯示、看起來像沒反應」的空窗期。純網頁、不掛 preload，只用
+ *  fetch 輪詢 /api/startup/status，跟主視窗完全獨立。 */
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 420,
+    height: 260,
+    frame: false,
+    resizable: false,
+    movable: true,
+    show: false,
+    alwaysOnTop: true,
+    transparent: true,
+    backgroundColor: "#00000000",
+    skipTaskbar: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  splashWindow.loadFile(path.join(__dirname, "splash.html"), {
+    search: `base=${encodeURIComponent(BASE_URL)}`,
+  });
+  splashWindow.once("ready-to-show", () => splashWindow?.show());
+  splashWindow.on("closed", () => {
+    splashWindow = null;
+  });
+}
+
+function closeSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+  splashWindow = null;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -98,7 +139,30 @@ function createWindow() {
     },
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow.maximize());
+  mainWindow.once("ready-to-show", () => {
+    closeSplashWindow();
+    mainWindow.maximize();
+    mainWindow.show();
+  });
+
+  // 沒設自訂選單時，Electron 預設選單的「放大」快捷鍵是 CmdOrCtrl+Plus，
+  // Windows 鍵盤上這個鍵位實際要按 Shift+= 才打得出「+」，所以裸的
+  // Ctrl+= 不會命中；「縮小」預設是 CmdOrCtrl+-，不需要 Shift，才會正常。
+  // 直接自己接管這三個鍵，同時涵蓋主鍵區與數字鍵區的 +/-。
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || (!input.control && !input.meta)) return;
+    if (input.key === "=" || input.key === "+") {
+      mainWindow.webContents.zoomLevel += 0.5;
+      event.preventDefault();
+    } else if (input.key === "-") {
+      mainWindow.webContents.zoomLevel -= 0.5;
+      event.preventDefault();
+    } else if (input.key === "0") {
+      mainWindow.webContents.zoomLevel = 0;
+      event.preventDefault();
+    }
+  });
+
   mainWindow.loadURL(BASE_URL);
 
   // 外部連結一律用系統瀏覽器開啟，視窗內只顯示本機 App
@@ -131,9 +195,12 @@ async function bootstrap() {
     HOSTNAME,
   };
 
+  createSplashWindow();
+
   applyPendingMigrations(path.join(dataDir, "portfolio.db"));
   startNextServer(env);
   await waitForServer(BASE_URL, HEALTH_TIMEOUT_MS);
+  await waitForServer(`${BASE_URL}/api/startup/status`, HEALTH_TIMEOUT_MS);
   createWindow();
 }
 
@@ -153,6 +220,7 @@ app.whenReady().then(async () => {
       });
     }
   } catch (err) {
+    closeSplashWindow();
     dialog.showErrorBox("啟動失敗", err instanceof Error ? err.message : String(err));
     app.quit();
   }

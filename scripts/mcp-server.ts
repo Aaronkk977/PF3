@@ -6,6 +6,10 @@
  *   search_transactions   — 搜尋交易紀錄（可篩代號、類型、日期範圍）
  *   get_portfolio_summary — 組合整體概況（總市值、未實現損益、帳戶拆解）
  *   get_trading_review    — 期間操作複盤（逐檔/逐筆損益、進場品質、止損排行）
+ *   search_notes          — 搜尋使用者的投資筆記（產業研究／操作策略／市場觀察）
+ *   get_performance       — 讀取分析頁的績效快取（回檔／最大回撤／夏普／波動率／基準比較）
+ *   create_note           — 新增一則投資筆記
+ *   update_note           — 編輯既有筆記（標題／內容／類型／日期／關聯標的／標籤，或用 append_content 在既有內容後補充，用於協作式追蹤同一則筆記的後續想法）
  *
  * Run:
  *   npx tsx scripts/mcp-server.ts
@@ -23,6 +27,7 @@
 
 import { config } from "dotenv";
 import path from "path";
+import { createHash } from "crypto";
 
 // Load .env from project root before PrismaClient initialises
 config({ path: path.resolve(process.cwd(), ".env") });
@@ -46,6 +51,22 @@ function toNum(v: Prisma.Decimal | null | undefined): number {
 
 function fmtDate(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/** 將日曆日期存成 UTC 正午，與網頁版 src/lib/date-keys.ts 的 parseCalendarDate 一致，
+ *  避免 MCP 寫入的 noteDate 跟網頁顯示的日期對不上（差一天）。 */
+function parseCalendarDate(value: string): Date {
+  const trimmed = value.trim();
+  const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) {
+    const d = new Date(trimmed);
+    if (Number.isNaN(d.getTime())) throw new Error(`無效日期: ${value}`);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0, 0));
+  }
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  return new Date(Date.UTC(y, mo, day, 12, 0, 0, 0));
 }
 
 // ── tool: get_holdings ───────────────────────────────────────────────────────
@@ -160,6 +181,295 @@ async function searchTransactions(args: {
     note: t.note ?? null,
     total: toNum(t.quantity) * toNum(t.price) + toNum(t.fee) + toNum(t.tax),
   }));
+}
+
+// ── tool: get_performance ────────────────────────────────────────────────────
+
+/** 與 src/lib/performance-cache.ts 的 getDataFingerprint 相同演算法，
+ *  用來判斷快取是否仍對應目前的交易資料（新增交易後快取就過期）。 */
+async function computeDataFingerprint(): Promise<string> {
+  const [txCount, txMaxDate, accountAgg] = await Promise.all([
+    prisma.transaction.count(),
+    prisma.transaction.aggregate({ _max: { date: true } }),
+    prisma.account.aggregate({ _count: true, _sum: { cash: true } }),
+  ]);
+  const raw = [
+    txCount,
+    txMaxDate._max.date?.toISOString() ?? "",
+    accountAgg._count,
+    accountAgg._sum.cash?.toString() ?? "0",
+  ].join(":");
+  return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+async function getPerformance(args: { series_days?: number }) {
+  const rows = await prisma.performanceSnapshot.findMany({ orderBy: { computedAt: "desc" } });
+  if (rows.length === 0) {
+    throw new Error("尚無績效快取。請先在網頁的分析頁載入一次，系統會計算並快取績效資料");
+  }
+
+  const [fingerprint, accounts] = await Promise.all([
+    computeDataFingerprint(),
+    prisma.account.findMany({ select: { id: true, name: true } }),
+  ]);
+  const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
+
+  const seriesDays = Math.min(Math.max(args.series_days ?? 14, 0), 400);
+
+  return rows.map((r) => {
+    // cacheKey 形如 v19|2026-01-01|2026-07-19|p:<accountId,...|all>|b:0050.TW,...
+    const pMatch = r.cacheKey.match(/\|p:([^|]*)\|/);
+    const scopeRaw = pMatch?.[1] ?? "";
+    const scope =
+      scopeRaw === "all"
+        ? "全部帳戶"
+        : scopeRaw
+            .split(",")
+            .map((id) => accountNameById.get(id) ?? id)
+            .join("、") || "（未知）";
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(r.payload) as Record<string, unknown>;
+    } catch {
+      return { scope, period: { from: r.periodStart, to: r.periodEnd }, error: "快取內容無法解析" };
+    }
+
+    const dd = Array.isArray(payload.drawdownSeries)
+      ? (payload.drawdownSeries as { date: string; drawdownPct: number }[])
+      : [];
+    const last = dd[dd.length - 1] ?? null;
+
+    return {
+      scope,
+      period: { from: r.periodStart, to: r.periodEnd },
+      computedAt: r.computedAt.toISOString(),
+      /** false 表示計算後又有新交易／現金變動，數字僅供參考，建議回網頁分析頁重新載入 */
+      isFresh: r.dataFingerprint === fingerprint,
+      currentDrawdownPct: last ? Math.round(last.drawdownPct * 100) / 100 : null,
+      currentDrawdownDate: last?.date ?? null,
+      riskIndicators: payload.riskIndicators ?? null,
+      keyIndicators: payload.keyIndicators ?? null,
+      todayChange: payload.todayChange ?? null,
+      todayChangePct: payload.todayChangePct ?? null,
+      calculation: payload.calculation ?? null,
+      benchmarks: payload.benchmarks ?? null,
+      recentDrawdownSeries: seriesDays > 0 ? dd.slice(-seriesDays) : [],
+    };
+  });
+}
+
+// ── notes: shared helpers ────────────────────────────────────────────────────
+
+const NOTE_INCLUDE = {
+  instruments: { include: { instrument: true } },
+  tags: { include: { tag: true } },
+} satisfies Prisma.NoteInclude;
+
+type NoteWithRelations = Prisma.NoteGetPayload<{ include: typeof NOTE_INCLUDE }>;
+
+function formatNote(n: NoteWithRelations) {
+  return {
+    id: n.id,
+    title: n.title,
+    kind: n.kind,
+    noteDate: fmtDate(n.noteDate),
+    content: n.content,
+    symbols: n.instruments.map((i) => i.instrument.symbol),
+    tags: n.tags.map((t) => t.tag.name),
+    createdAt: fmtDate(n.createdAt),
+    updatedAt: fmtDate(n.updatedAt),
+  };
+}
+
+async function getNoteById(id: string) {
+  const row = await prisma.note.findUniqueOrThrow({ where: { id }, include: NOTE_INCLUDE });
+  return formatNote(row);
+}
+
+async function assertNoteKindExists(kind: string) {
+  const exists = await prisma.noteKind.findUnique({ where: { name: kind } });
+  if (exists) return;
+  const kinds = await prisma.noteKind.findMany({ orderBy: { sortOrder: "asc" }, select: { name: true } });
+  throw new Error(`找不到筆記類型「${kind}」。目前可用類型：${kinds.map((k) => k.name).join("、") || "（無，請先在網頁上新增類型）"}`);
+}
+
+/** symbols -> instrumentIds，找不到的代號會直接丟錯，避免筆記悄悄連錯（或連不到）標的 */
+async function resolveInstrumentIds(symbols: string[]): Promise<string[]> {
+  const wanted = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+  if (wanted.length === 0) return [];
+  const found = await prisma.instrument.findMany({ where: { symbol: { in: wanted } }, select: { id: true, symbol: true } });
+  const foundSymbols = new Set(found.map((f) => f.symbol));
+  const missing = wanted.filter((s) => !foundSymbols.has(s));
+  if (missing.length > 0) {
+    throw new Error(`找不到標的代號：${missing.join("、")}（請確認代號是否存在於系統中）`);
+  }
+  return found.map((f) => f.id);
+}
+
+async function resolveTagIds(tagNames: string[]): Promise<string[]> {
+  const names = [...new Set(tagNames.map((t) => t.trim()).filter(Boolean))];
+  const ids: string[] = [];
+  for (const name of names) {
+    const tag = await prisma.tag.upsert({ where: { name }, create: { name }, update: {} });
+    ids.push(tag.id);
+  }
+  return ids;
+}
+
+// ── tool: create_note ────────────────────────────────────────────────────────
+
+async function createNote(args: {
+  title: string;
+  content: string;
+  kind: string;
+  note_date?: string;
+  symbols?: string[];
+  tags?: string[];
+}) {
+  const title = typeof args.title === "string" ? args.title.trim() : "";
+  if (!title) throw new Error("標題必填");
+
+  const content = typeof args.content === "string" ? args.content.trim() : "";
+  if (!content) throw new Error("內容必填");
+
+  const kind = typeof args.kind === "string" ? args.kind.trim() : "";
+  if (!kind) throw new Error("類型必填");
+  await assertNoteKindExists(kind);
+
+  const noteDate = args.note_date ? parseCalendarDate(args.note_date) : parseCalendarDate(fmtDate(new Date()));
+
+  const instrumentIds = await resolveInstrumentIds(args.symbols ?? []);
+  const tagIds = await resolveTagIds(args.tags ?? []);
+
+  const note = await prisma.note.create({ data: { title, content, kind, noteDate } });
+
+  for (const instrumentId of instrumentIds) {
+    await prisma.noteOnInstrument.create({ data: { noteId: note.id, instrumentId } });
+  }
+  for (const tagId of tagIds) {
+    await prisma.noteOnTag.create({ data: { noteId: note.id, tagId } });
+  }
+
+  return getNoteById(note.id);
+}
+
+// ── tool: update_note ────────────────────────────────────────────────────────
+
+async function updateNote(args: {
+  id: string;
+  title?: string;
+  content?: string;
+  append_content?: string;
+  kind?: string;
+  note_date?: string;
+  symbols?: string[];
+  tags?: string[];
+}) {
+  if (!args.id) throw new Error("id 必填");
+  const existing = await prisma.note.findUnique({ where: { id: args.id } });
+  if (!existing) throw new Error("筆記不存在");
+
+  if (args.content !== undefined && args.append_content !== undefined) {
+    throw new Error("content 與 append_content 不可同時使用（一個是整段取代，一個是附加）");
+  }
+
+  const data: Prisma.NoteUpdateInput = {};
+
+  if (args.title !== undefined) {
+    const trimmed = args.title.trim();
+    if (!trimmed) throw new Error("標題必填");
+    data.title = trimmed;
+  }
+
+  if (args.content !== undefined) {
+    const trimmed = args.content.trim();
+    if (!trimmed) throw new Error("內容必填");
+    data.content = trimmed;
+  } else if (args.append_content !== undefined) {
+    const addition = args.append_content.trim();
+    if (!addition) throw new Error("append_content 不可為空");
+    data.content = `${existing.content}\n\n---\n[${fmtDate(new Date())} 補充]\n${addition}`;
+  }
+
+  if (args.kind !== undefined) {
+    const kind = args.kind.trim();
+    if (!kind) throw new Error("類型必填");
+    await assertNoteKindExists(kind);
+    data.kind = kind;
+  }
+
+  if (args.note_date !== undefined) {
+    data.noteDate = parseCalendarDate(args.note_date);
+  }
+
+  if (Object.keys(data).length > 0) {
+    await prisma.note.update({ where: { id: args.id }, data });
+  }
+
+  if (args.symbols !== undefined) {
+    const instrumentIds = await resolveInstrumentIds(args.symbols);
+    await prisma.noteOnInstrument.deleteMany({ where: { noteId: args.id } });
+    for (const instrumentId of instrumentIds) {
+      await prisma.noteOnInstrument.create({ data: { noteId: args.id, instrumentId } });
+    }
+  }
+
+  if (args.tags !== undefined) {
+    const tagIds = await resolveTagIds(args.tags);
+    await prisma.noteOnTag.deleteMany({ where: { noteId: args.id } });
+    for (const tagId of tagIds) {
+      await prisma.noteOnTag.create({ data: { noteId: args.id, tagId } });
+    }
+  }
+
+  return getNoteById(args.id);
+}
+
+// ── tool: search_notes ──────────────────────────────────────────────────────
+
+async function searchNotes(args: {
+  kind?: string;
+  keyword?: string;
+  tag?: string;
+  symbol?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+}) {
+  const where: Prisma.NoteWhereInput = {};
+
+  if (args.kind) {
+    where.kind = { contains: args.kind };
+  }
+  if (args.keyword) {
+    where.OR = [
+      { title: { contains: args.keyword } },
+      { content: { contains: args.keyword } },
+    ];
+  }
+  if (args.tag) {
+    where.tags = { some: { tag: { name: { contains: args.tag } } } };
+  }
+  if (args.symbol) {
+    where.instruments = {
+      some: { instrument: { symbol: { contains: args.symbol.toUpperCase() } } },
+    };
+  }
+  if (args.date_from || args.date_to) {
+    where.noteDate = {};
+    if (args.date_from) (where.noteDate as Prisma.DateTimeFilter).gte = new Date(args.date_from);
+    if (args.date_to) (where.noteDate as Prisma.DateTimeFilter).lte = new Date(args.date_to + "T23:59:59Z");
+  }
+
+  const rows = await prisma.note.findMany({
+    where,
+    include: NOTE_INCLUDE,
+    orderBy: { noteDate: "desc" },
+    take: args.limit ?? 50,
+  });
+
+  return rows.map(formatNote);
 }
 
 // ── tool: get_trading_review ─────────────────────────────────────────────────
@@ -676,6 +986,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: "search_notes",
+      description:
+        "搜尋使用者的投資筆記（產業研究／操作策略／市場觀察），可依類型、關鍵字（標題或內文）、標籤、關聯標的代號、日期區間篩選。適合在複盤時參考使用者自己記錄的論點與策略",
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", description: "筆記類型名稱（部分比對），例如「產業研究」「操作策略」「市場觀察」，或使用者自訂的其他類型" },
+          keyword: { type: "string", description: "關鍵字，比對標題或內文（部分比對）" },
+          tag: { type: "string", description: "標籤名稱（部分比對）" },
+          symbol: { type: "string", description: "關聯標的代號（部分比對），例如 '2330' 或 'AAPL'" },
+          date_from: { type: "string", description: "起始日期 YYYY-MM-DD（依筆記日期 noteDate）" },
+          date_to: { type: "string", description: "結束日期 YYYY-MM-DD（依筆記日期 noteDate）" },
+          limit: { type: "number", description: "最多回傳筆數（預設 50，最大 200）" },
+        },
+      },
+    },
+    {
+      name: "get_performance",
+      description:
+        "讀取網頁分析頁已計算的績效快取，回傳每個快取範圍（全部帳戶或單一帳戶）的：目前回檔幅度（距離高點 %）、最大回撤與高點/低點/回復日期、夏普值、波動率、期間報酬、當日損益、基準比較（如 0050、S&P 500），以及近期逐日回檔序列。適合用來判斷『組合從高點回檔多少了』這類風控問題。注意：資料來自快取，isFresh=false 表示之後又有新交易，需在網頁分析頁重新載入才會更新",
+      inputSchema: {
+        type: "object",
+        properties: {
+          series_days: { type: "number", description: "回傳最近 N 天的逐日回檔序列（預設 14，0 表示不要序列，最大 400）" },
+        },
+      },
+    },
+    {
+      name: "create_note",
+      description:
+        "新增一則投資筆記（產業研究／操作策略／市場觀察等）。kind 必須是既有的筆記類型（可先用 search_notes 看看目前有哪些 kind），若不存在會回傳目前可用類型清單。symbols 用代號關聯標的，若代號不存在會報錯；tags 若不存在會自動建立",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "筆記標題" },
+          content: { type: "string", description: "筆記內容（Markdown）" },
+          kind: { type: "string", description: "筆記類型名稱，需為既有類型，例如「產業研究」「操作策略」「市場觀察」" },
+          note_date: { type: "string", description: "筆記日期 YYYY-MM-DD，預設今天" },
+          symbols: { type: "array", items: { type: "string" }, description: "關聯的標的代號列表，例如 ['2330', 'AAPL']" },
+          tags: { type: "array", items: { type: "string" }, description: "標籤名稱列表，不存在會自動建立" },
+        },
+        required: ["title", "content", "kind"],
+      },
+    },
+    {
+      name: "update_note",
+      description:
+        "編輯既有筆記，用於跟使用者協作同一則筆記（例如追蹤一檔股票的研究隨時間演進）。只需帶想修改的欄位，其餘保持不變。content 會整段取代，若只想在既有內容後面補充想法，改用 append_content（會自動加上日期分隔線，避免蓋掉使用者原本寫的東西）。symbols/tags 帶入時會整組取代成新的清單",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "筆記 id（可用 search_notes 取得）" },
+          title: { type: "string", description: "新標題" },
+          content: { type: "string", description: "新內容（整段取代，Markdown）。與 append_content 擇一使用" },
+          append_content: { type: "string", description: "要附加在既有內容後面的文字（會自動加上日期分隔線），適合用於協作式追加想法而不覆蓋原內容" },
+          kind: { type: "string", description: "新的筆記類型，需為既有類型" },
+          note_date: { type: "string", description: "新的筆記日期 YYYY-MM-DD" },
+          symbols: { type: "array", items: { type: "string" }, description: "新的關聯標的代號列表（整組取代原本的關聯）" },
+          tags: { type: "array", items: { type: "string" }, description: "新的標籤名稱列表（整組取代原本的標籤）" },
+        },
+        required: ["id"],
+      },
+    },
   ],
 }));
 
@@ -700,6 +1074,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         account?: string; tag?: string;
         sort_by?: "buyAmt" | "sellAmt" | "realizedPnl" | "lossAmt" | "buyPnl" | "buyLossAmt" | "buyLossPct";
         top_n?: number; include_transactions?: boolean;
+      });
+    } else if (name === "search_notes") {
+      const a = args as {
+        kind?: string; keyword?: string; tag?: string; symbol?: string;
+        date_from?: string; date_to?: string; limit?: number;
+      };
+      if (a.limit) a.limit = Math.min(a.limit, 200);
+      result = await searchNotes(a);
+    } else if (name === "get_performance") {
+      result = await getPerformance(args as { series_days?: number });
+    } else if (name === "create_note") {
+      result = await createNote(args as {
+        title: string; content: string; kind: string;
+        note_date?: string; symbols?: string[]; tags?: string[];
+      });
+    } else if (name === "update_note") {
+      result = await updateNote(args as {
+        id: string; title?: string; content?: string; append_content?: string;
+        kind?: string; note_date?: string; symbols?: string[]; tags?: string[];
       });
     } else {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };

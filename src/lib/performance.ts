@@ -4,12 +4,11 @@ import {
 } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import {
-  buildCashFlowSeries,
   buildCumulativeReturnPctNeutralizingFlows,
   buildCumulativeReturnPctSeries,
   buildForwardFilledCloseSeries,
-  buildPortfolioValueSeries,
 } from "@/lib/portfolio-history";
+import { resolvePortfolioValueSeries } from "@/lib/portfolio-value-series";
 import {
   analyzeValueSeries,
   computeSemiDeviation,
@@ -205,26 +204,17 @@ export async function getPerformance(
   const allAccountIds = allAccounts.map((a) => a.id);
 
   report("回放整體組合持倉…", 5);
-  const portfolioPoints = await buildPortfolioValueSeries(
-    periodStart,
-    periodEnd,
-    { accountIds: selectedIds },
-  );
-  const entirePortfolioPoints = await buildPortfolioValueSeries(
-    periodStart,
-    periodEnd,
-    { accountIds: allAccountIds },
-  );
-  const entirePortfolioCashFlows = await buildCashFlowSeries(
-    periodStart,
-    periodEnd,
-    { accountIds: allAccountIds },
-  );
-  const portfolioCashFlows = await buildCashFlowSeries(
-    periodStart,
-    periodEnd,
-    { accountIds: selectedIds },
-  );
+  const { points: portfolioPoints, cashFlows: portfolioCashFlows } =
+    await resolvePortfolioValueSeries(periodStart, periodEnd, {
+      accountIds: selectedIds,
+    });
+  // 「全部帳戶」跟「目前選取的帳戶」常常是同一組（沒篩選帳戶時就是全選），
+  // 這種情況下面這次呼叫其實是在算一模一樣的東西——resolvePortfolioValueSeries
+  // 自己有快取，上面那次呼叫剛寫入的結果這裡會直接命中，不會真的重算一次。
+  const { points: entirePortfolioPoints, cashFlows: entirePortfolioCashFlows } =
+    await resolvePortfolioValueSeries(periodStart, periodEnd, {
+      accountIds: allAccountIds,
+    });
   const rawValues = portfolioPoints.map((p) => p.value);
   const startValue = rawValues[0] ?? 0;
   const endValue = rawValues[rawValues.length - 1] ?? 0;
@@ -277,12 +267,11 @@ export async function getPerformance(
       `帳戶曲線：${acc.name}…`,
       10 + Math.round(((i + 1) / Math.max(accountCount, 1)) * 35),
     );
-    const points = await buildPortfolioValueSeries(periodStart, periodEnd, {
-      accountIds: [acc.id],
-    });
-    const accFlows = await buildCashFlowSeries(periodStart, periodEnd, {
-      accountIds: [acc.id],
-    });
+    const { points, cashFlows: accFlows } = await resolvePortfolioValueSeries(
+      periodStart,
+      periodEnd,
+      { accountIds: [acc.id] },
+    );
     const dataKey = accountDataKey(acc.id);
     chartLines.push({
       dataKey,

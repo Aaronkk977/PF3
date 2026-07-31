@@ -53,6 +53,7 @@ export const PAGE_CACHE_KEYS = {
   holdings: "holdings",
   transactions: "transactions",
   trades: "trades",
+  notes: "notes",
 } as const;
 
 /** Remove a single cache entry from both in-memory map and sessionStorage. */

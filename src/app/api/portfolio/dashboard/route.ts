@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 import { buildPriorityInstrumentSuggestions } from "@/lib/instrument-suggestions.server";
 import { getHoldings, getPortfolioSummary } from "@/lib/portfolio-engine";
 import { prisma } from "@/lib/db";
+import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
 import { getWatchlists } from "@/lib/watchlist";
 
 export async function GET() {
   try {
+    // 保險：正常情況下開機維護由 /api/startup/status 在啟動畫面階段就跑完，
+    // 這裡只是防呆——萬一那條路徑沒被觸發（例如直接用 next dev 開發），
+    // 維護還是會在背景啟動，不 await、不拖慢這支頁面查詢。
+    ensureStartupMaintenanceStarted();
+
     const [holdings, watchlists, instruments] = await Promise.all([
       getHoldings(),
       getWatchlists(),

@@ -4,11 +4,8 @@ import {
   ENTIRE_PORTFOLIO_DATA_KEY,
   ENTIRE_PORTFOLIO_LABEL,
 } from "@/lib/chart-constants";
-import {
-  buildCashFlowSeries,
-  buildPortfolioValueSeries,
-  type CashFlowEvent,
-} from "@/lib/portfolio-history";
+import type { CashFlowEvent } from "@/lib/portfolio-history";
+import { resolvePortfolioValueSeries } from "@/lib/portfolio-value-series";
 import { STANDARD_ACCOUNTS, accountDataKey } from "@/lib/standard-accounts";
 
 export type ValueTrendLine = {
@@ -101,7 +98,7 @@ export async function buildHoldingsValueTrend(
 
   for (let i = 0; i < scopeAccounts.length; i++) {
     const acc = scopeAccounts[i]!;
-    const points = await buildPortfolioValueSeries(periodStart, periodEnd, {
+    const { points } = await resolvePortfolioValueSeries(periodStart, periodEnd, {
       accountIds: [acc.id],
     });
     if (points.length === 0) continue;
@@ -114,10 +111,15 @@ export async function buildHoldingsValueTrend(
     });
   }
 
+  // 「整體」這條線的區間跟現金流查詢，帳戶組合是同一組 scopeIds，兩者共用
+  // 同一次 resolvePortfolioValueSeries 呼叫（它本身回傳的 cashFlows 就是
+  // 這個帳戶組合的現金流），不用另外再查一次。
+  let cashFlows: CashFlowEvent[] = [];
   if (options.showEntirePortfolioLine && scopeIds.length > 0) {
-    const entirePoints = await buildPortfolioValueSeries(periodStart, periodEnd, {
-      accountIds: scopeIds,
-    });
+    const { points: entirePoints, cashFlows: entireFlows } =
+      await resolvePortfolioValueSeries(periodStart, periodEnd, {
+        accountIds: scopeIds,
+      });
     if (entirePoints.length > 0) {
       lines.push({
         dataKey: ENTIRE_PORTFOLIO_DATA_KEY,
@@ -127,14 +129,12 @@ export async function buildHoldingsValueTrend(
         points: entirePoints,
       });
     }
+    if (options.includeCashFlows) cashFlows = entireFlows;
+  } else if (options.includeCashFlows && scopeIds.length > 0) {
+    ({ cashFlows } = await resolvePortfolioValueSeries(periodStart, periodEnd, {
+      accountIds: scopeIds,
+    }));
   }
-
-  const cashFlows =
-    options.includeCashFlows && scopeIds.length > 0
-      ? await buildCashFlowSeries(periodStart, periodEnd, {
-          accountIds: scopeIds,
-        })
-      : [];
 
   return {
     lines,

@@ -1,4 +1,4 @@
-# Portfolio Performance desktop launcher (hidden; splash is splash.hta)
+﻿# Portfolio Performance desktop launcher (hidden; splash is splash.hta)
 $ErrorActionPreference = "Stop"
 
 $LauncherDir = $PSScriptRoot
@@ -49,6 +49,16 @@ function Close-Splash {
   Set-Content -Path $script:splashOffFile -Value "1" -Encoding ascii -ErrorAction SilentlyContinue
 }
 
+# 這台機器上觀察到 node.exe 啟動後幾秒內會在新的 PID 下重新出現（原本
+# Start-Process 拿到的 process 物件很快變成 HasExited=$true，但 port 上其實
+# 一直有另一個 PID 的 node.exe 正常在serve）。原因不明（可能跟防毒即時掃描
+# 或這版 Node 在 Windows 上的行為有關），但只信 HasExited 會把「其實活著、
+# 只是換了 PID」誤判成「啟動失敗」。改用「port 有沒有人在聽」當作活著的
+# 真正依據，HasExited 只在 port 也沒人聽時才當作真的掛了。
+function Test-PortListening([int]$Port) {
+  return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
+
 function Show-SplashError([string]$Message) {
   $utf8 = New-Object System.Text.UTF8Encoding $true
   [System.IO.File]::WriteAllText($script:splashErrorFile, $Message, $utf8)
@@ -89,6 +99,22 @@ try {
       }
     }
     Remove-Item $script:pidFile -Force -ErrorAction SilentlyContinue
+  }
+
+  # server.pid 只認得「上一次由 launcher 啟動」的 server。手動跑過 server.js、
+  # 或上一次沒收乾淨時，port 會被一個 pid file 不知道的 node 佔住；這時新開的
+  # server 會因為 EADDRINUSE 立刻結束，下面的健康檢查只看得到 HasExited，就會
+  # 報成「Server exited early」→ 啟動畫面顯示「請重新執行 npm run build:app」，
+  # 完全指錯方向（build 是好的，只是 port 被佔走）。先收掉佔用者。
+  $stale = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+  if ($stale.Count -gt 0) {
+    foreach ($conn in $stale) {
+      $owner = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+      if ($owner -and $owner.ProcessName -eq "node") {
+        Stop-Process -Id $owner.Id -Force -ErrorAction SilentlyContinue
+      }
+    }
+    Start-Sleep -Seconds 1
   }
 
   if (-not (Test-Path $script:dbFile)) {
@@ -143,16 +169,46 @@ try {
     -WindowStyle Hidden `
     -PassThru
 
+  # 先寫下 Start-Process 拿到的 PID，等確認真的活著之後會用 port 的實際
+  # owner 覆寫一次（見下方，處理 PID 中途換過的狀況）。
   $serverProcess.Id | Out-File -FilePath $script:pidFile -Encoding ascii -NoNewline
 
+  # 先等 server process 真的能回應（活著），再等 /api/startup/status 回報
+  # 開機維護（股票分割偵測＋幣別／追蹤清單名稱校正）跑完，啟動畫面才關閉。
+  # 這樣使用者看到畫面出現時，後續切換頁面就不會再被這些維護工作拖慢。
   $deadline = (Get-Date).AddSeconds($healthTimeoutSeconds)
-  $ready = $false
+  $serverAlive = $false
   while ((Get-Date) -lt $deadline) {
-    if ($serverProcess.HasExited) {
+    if ($serverProcess.HasExited -and -not (Test-PortListening $port)) {
       throw "Server exited early. Run: npm run build:app"
     }
     try {
       $null = Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -TimeoutSec 2
+      $serverAlive = $true
+      break
+    } catch {
+      Start-Sleep -Milliseconds 400
+    }
+  }
+  if (-not $serverAlive) {
+    throw "Server did not respond in ${healthTimeoutSeconds}s on $baseUrl"
+  }
+
+  # 確認活著之後，用「port 實際 owner」覆寫 pid file——如果中途換過 PID，
+  # 下次啟動的 stale-process 清理才抓得到真正在跑的那個。
+  $actualOwner = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty OwningProcess)
+  if ($actualOwner) {
+    $actualOwner | Out-File -FilePath $script:pidFile -Encoding ascii -NoNewline
+  }
+
+  $ready = $false
+  while ((Get-Date) -lt $deadline) {
+    if ($serverProcess.HasExited -and -not (Test-PortListening $port)) {
+      throw "Server exited early. Run: npm run build:app"
+    }
+    try {
+      $null = Invoke-WebRequest -Uri "$baseUrl/api/startup/status" -UseBasicParsing -TimeoutSec 30
       $ready = $true
       break
     } catch {
@@ -160,7 +216,7 @@ try {
     }
   }
   if (-not $ready) {
-    throw "Server did not respond in ${healthTimeoutSeconds}s on $baseUrl"
+    throw "Startup maintenance did not finish in ${healthTimeoutSeconds}s on $baseUrl"
   }
 
   $browser = $null

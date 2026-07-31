@@ -6,7 +6,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 
 const RECONNECTED_DISPLAY_MS = 3000;
 
-function CloseButton({ onClick, tone }: { onClick: () => void; tone: "amber" | "positive" }) {
+function CloseButton({ onClick, tone }: { onClick: () => void; tone: "amber" | "primary" }) {
   return (
     <button
       type="button"
@@ -15,7 +15,7 @@ function CloseButton({ onClick, tone }: { onClick: () => void; tone: "amber" | "
       className={
         tone === "amber"
           ? "ml-1 shrink-0 rounded p-0.5 text-amber-200/70 transition-colors hover:text-amber-200"
-          : "ml-1 shrink-0 rounded p-0.5 text-[var(--color-positive)]/70 transition-colors hover:text-[var(--color-positive)]"
+          : "ml-1 shrink-0 rounded p-0.5 text-[var(--color-primary)]/70 transition-colors hover:text-[var(--color-primary)]"
       }
     >
       <X className="h-3 w-3" />
@@ -62,12 +62,12 @@ export function ConnectivityBanner() {
   if (showReconnected) {
     return (
       <div
-        className="fixed top-20 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-md border border-[var(--color-positive)]/30 bg-[var(--color-card)]/95 px-3 py-2 text-xs text-[var(--color-positive)] shadow-md backdrop-blur-sm"
+        className="fixed top-20 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-md border border-[var(--color-primary)]/30 bg-[var(--color-card)]/95 px-3 py-2 text-xs text-[var(--color-primary)] shadow-md backdrop-blur-sm"
         role="status"
       >
         <Wifi className="h-3.5 w-3.5 shrink-0" aria-hidden />
         已恢復連線
-        <CloseButton tone="positive" onClick={() => setShowReconnected(false)} />
+        <CloseButton tone="primary" onClick={() => setShowReconnected(false)} />
       </div>
     );
   }

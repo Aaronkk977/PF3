@@ -7,9 +7,12 @@ import {
   DEPRECATED_TAG_NAMES,
   withoutDeprecatedTags,
 } from "@/lib/deprecated-tags";
+import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
 
 export async function GET() {
   try {
+    ensureStartupMaintenanceStarted();
+
     await prisma.tag.deleteMany({
       where: { name: { in: [...DEPRECATED_TAG_NAMES] } },
     });

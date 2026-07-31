@@ -1,10 +1,11 @@
 import { mapWithConcurrency } from "@/lib/async-pool";
+import { externalReadLimiter } from "@/lib/concurrency-limiter";
 import { prisma } from "@/lib/db";
 import {
   periodStartWithPriceLookback,
   toLocalDateKey,
 } from "@/lib/date-keys";
-import { getUsdToTwdRate, toBaseCurrency } from "@/lib/fx";
+import { getUsdToTwdRate } from "@/lib/fx";
 import {
   buildCashFlowSeries,
   type CashFlowEvent,
@@ -15,179 +16,21 @@ import {
   getTransactionMeta,
   setPortfolioValueCache,
   type PortfolioValueCachePayload,
-  type PortfolioValueEndState,
 } from "@/lib/portfolio-value-cache";
-import { getHistoricalPrices } from "@/lib/yahoo";
-import { toNumber } from "@/lib/utils";
+import {
+  calendarDateKeys,
+  forwardFillPrices,
+  mapFromRecord,
+  nextDateKey,
+  simulateValueDays,
+  trimAnomalousLeadingPoint,
+  type SeriesContext,
+  type TxRow,
+} from "@/lib/portfolio-value-simulation";
+import { getHistoricalPrices, getQuotes } from "@/lib/yahoo";
 
 export type { CashFlowEvent } from "@/lib/portfolio-history";
 export { buildPortfolioValueCacheKey } from "@/lib/portfolio-value-cache";
-
-type TxRow = {
-  date: Date;
-  type: string;
-  quantity: unknown;
-  price: unknown;
-  fee: unknown;
-  tax: unknown;
-  accountId: string;
-  account: { currency: string };
-  instrument: { symbol: string; currency: string | null } | null;
-};
-
-type SeriesContext = {
-  allTxs: TxRow[];
-  allowedAccountIds: Set<string>;
-  accountCurrencies: Map<string, string>;
-  currencyBySymbol: Map<string, string | null>;
-  usdRate: number;
-};
-
-function applyCashToAccount(
-  cashByAccount: Map<string, number>,
-  tx: TxRow,
-): void {
-  const qty = toNumber(tx.quantity);
-  const price = toNumber(tx.price);
-  const fee = toNumber(tx.fee);
-  const tax = toNumber(tx.tax);
-  const gross = qty * price;
-  const cur = cashByAccount.get(tx.accountId) ?? 0;
-
-  switch (tx.type) {
-    case "DEPOSIT":
-      cashByAccount.set(tx.accountId, cur + gross);
-      break;
-    case "WITHDRAWAL":
-      cashByAccount.set(tx.accountId, cur - gross);
-      break;
-    case "BUY":
-      cashByAccount.set(tx.accountId, cur - gross - fee - tax);
-      break;
-    case "SELL":
-      cashByAccount.set(tx.accountId, cur + gross - fee - tax);
-      break;
-    case "DIVIDEND":
-      cashByAccount.set(tx.accountId, cur + gross);
-      break;
-  }
-}
-
-function applySecurityPosition(
-  positions: Map<string, number>,
-  tx: TxRow,
-): void {
-  if (!tx.instrument) return;
-  const symbol = tx.instrument.symbol;
-  const qty = toNumber(tx.quantity);
-
-  if (tx.type === "BUY") {
-    positions.set(symbol, (positions.get(symbol) ?? 0) + qty);
-  } else if (tx.type === "SELL") {
-    const next = (positions.get(symbol) ?? 0) - qty;
-    if (next <= 0.0000001) positions.delete(symbol);
-    else positions.set(symbol, next);
-  }
-}
-
-async function sumCashInBase(
-  cashByAccount: Map<string, number>,
-  currencies: Map<string, string>,
-  usdRate: number,
-): Promise<number> {
-  let total = 0;
-  for (const [accountId, balance] of cashByAccount) {
-    const currency = currencies.get(accountId) ?? "TWD";
-    if (currency === "TWD" || !currency) {
-      total += balance;
-    } else if (currency === "USD") {
-      total += balance * usdRate;
-    } else {
-      total += await toBaseCurrency(balance, currency);
-    }
-  }
-  return total;
-}
-
-function calendarDateKeys(periodStart: Date, periodEnd: Date): string[] {
-  const keys: string[] = [];
-  const cursor = new Date(periodStart);
-  cursor.setHours(0, 0, 0, 0);
-  const end = new Date(periodEnd);
-  end.setHours(23, 59, 59, 999);
-
-  while (cursor <= end) {
-    keys.push(toLocalDateKey(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return keys;
-}
-
-function forwardFillPrices(
-  bars: { date: string; close: number }[],
-  periodStart: Date,
-  periodEnd: Date,
-  seedPrice?: number,
-): Map<string, number> {
-  const byDate = new Map(bars.map((b) => [b.date, b.close]));
-  const result = new Map<string, number>();
-
-  const cursor = new Date(periodStart);
-  cursor.setHours(0, 0, 0, 0);
-  const end = new Date(periodEnd);
-  end.setHours(23, 59, 59, 999);
-  const periodStartKey = toLocalDateKey(cursor);
-
-  const beforeStart = bars
-    .filter((b) => b.date < periodStartKey && b.close > 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
-  let lastPrice: number | null =
-    seedPrice !== undefined && seedPrice > 0
-      ? seedPrice
-      : beforeStart.length > 0
-        ? beforeStart[beforeStart.length - 1]!.close
-        : null;
-
-  while (cursor <= end) {
-    const key = toLocalDateKey(cursor);
-    if (byDate.has(key)) {
-      lastPrice = byDate.get(key)!;
-    }
-    if (lastPrice !== null && lastPrice > 0) {
-      result.set(key, lastPrice);
-    }
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  return result;
-}
-
-function trimAnomalousLeadingPoint(
-  points: { date: string; value: number }[],
-): { date: string; value: number }[] {
-  if (points.length < 2) return points;
-  const first = points[0]!.value;
-  const second = points[1]!.value;
-  if (second > 0 && first < second * 0.5) {
-    return points.slice(1);
-  }
-  return points;
-}
-
-function mapFromRecord(rec: Record<string, number>): Map<string, number> {
-  return new Map(Object.entries(rec));
-}
-
-function recordFromMap(map: Map<string, number>): Record<string, number> {
-  return Object.fromEntries(map);
-}
-
-function nextDateKey(dateStr: string): string {
-  const d = new Date(dateStr);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 1);
-  return toLocalDateKey(d);
-}
 
 async function loadSeriesContext(
   periodEnd: Date,
@@ -250,7 +93,7 @@ async function loadPriceMaps(
   const priceBySymbol = new Map<string, Map<string, number>>();
   if (symbols.length === 0) return priceBySymbol;
 
-  await mapWithConcurrency(symbols, 2, async (symbol) => {
+  await mapWithConcurrency(symbols, externalReadLimiter, async (symbol) => {
     const bars = await getHistoricalPrices(
       symbol,
       periodStartWithPriceLookback(periodStart),
@@ -265,83 +108,6 @@ async function loadPriceMaps(
     priceBySymbol.set(symbol, filled);
   });
   return priceBySymbol;
-}
-
-async function simulateValueDays(
-  ctx: SeriesContext,
-  dateKeys: string[],
-  initial: {
-    txIdx: number;
-    positions: Map<string, number>;
-    cashByAccount: Map<string, number>;
-  },
-  priceBySymbol: Map<string, Map<string, number>>,
-): Promise<{
-  points: { date: string; value: number }[];
-  endState: PortfolioValueEndState;
-}> {
-  const positions = new Map(initial.positions);
-  const cashByAccount = new Map(initial.cashByAccount);
-  let txIdx = initial.txIdx;
-  const points: { date: string; value: number }[] = [];
-  const lastPriceBySymbol: Record<string, number> = {};
-
-  for (const dateStr of dateKeys) {
-    while (txIdx < ctx.allTxs.length) {
-      const tx = ctx.allTxs[txIdx]!;
-      const txDay = toLocalDateKey(tx.date);
-      if (txDay > dateStr) break;
-      if (ctx.allowedAccountIds.has(tx.accountId)) {
-        applyCashToAccount(cashByAccount, tx);
-        applySecurityPosition(positions, tx);
-      }
-      txIdx++;
-    }
-
-    const cashTotal = await sumCashInBase(
-      cashByAccount,
-      ctx.accountCurrencies,
-      ctx.usdRate,
-    );
-
-    const held = [...positions.entries()].filter(([, qty]) => qty > 0);
-    let securitiesValue = 0;
-    let priced = 0;
-
-    for (const [symbol, qty] of held) {
-      const price = priceBySymbol.get(symbol)?.get(dateStr);
-      if (price !== undefined && price > 0) {
-        const fx = ctx.currencyBySymbol.get(symbol) === "USD" ? ctx.usdRate : 1;
-        securitiesValue += qty * price * fx;
-        priced++;
-        lastPriceBySymbol[symbol] = price;
-      }
-    }
-
-    if (held.length > 0 && priced < held.length) {
-      continue;
-    }
-
-    const total = securitiesValue + Math.max(0, cashTotal);
-    if (total <= 0) continue;
-    if (held.length > 0 && priced === 0 && cashTotal <= 0) continue;
-
-    points.push({ date: dateStr, value: total });
-  }
-
-  const lastDate =
-    dateKeys.length > 0 ? dateKeys[dateKeys.length - 1]! : initial.txIdx.toString();
-
-  return {
-    points,
-    endState: {
-      date: points.length > 0 ? points[points.length - 1]!.date : lastDate,
-      txIdx,
-      positions: recordFromMap(positions),
-      cashByAccount: recordFromMap(cashByAccount),
-      lastPriceBySymbol,
-    },
-  };
 }
 
 async function buildFullPortfolioValueSeries(
@@ -371,6 +137,7 @@ async function buildFullPortfolioValueSeries(
       cashByAccount: new Map(),
     },
     priceBySymbol,
+    { fetchLiveQuotes: getQuotes },
   );
 
   const trimmed = trimAnomalousLeadingPoint(points);
@@ -432,6 +199,7 @@ async function extendPortfolioValueSeries(
       cashByAccount: mapFromRecord(cached.endState.cashByAccount),
     },
     priceBySymbol,
+    { fetchLiveQuotes: getQuotes },
   );
 
   const mergedPoints = [...cached.points];

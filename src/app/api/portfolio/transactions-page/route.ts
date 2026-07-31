@@ -3,10 +3,13 @@ import { listAccountsWithComputedCash } from "@/lib/accounts";
 import { buildPriorityInstrumentSuggestions } from "@/lib/instrument-suggestions.server";
 import { toTransactionDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
+import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
 import { toNumber } from "@/lib/utils";
 
 export async function GET() {
   try {
+    ensureStartupMaintenanceStarted();
+
     const [transactions, instruments, accounts, priorityInstruments] =
       await Promise.all([
         prisma.transaction.findMany({

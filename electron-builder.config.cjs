@@ -19,7 +19,13 @@ module.exports = {
     output: "release",
   },
   afterPack: "scripts/electron-after-pack.cjs",
-  files: ["electron/main.js", "electron/preload.js", "electron/migrate.js", "package.json"],
+  files: [
+    "electron/main.js",
+    "electron/preload.js",
+    "electron/migrate.js",
+    "electron/splash.html",
+    "package.json",
+  ],
   extraResources: [
     {
       from: standaloneSource,
@@ -51,6 +57,8 @@ module.exports = {
     repo: "PF3",
     // 預設會建成草稿（對外不可見），改成直接發布，
     // 這樣 tag push 後朋友端的 electron-updater 才抓得到新版。
-    draft: false,
+    // (electron-builder 26.x 把舊的 `draft: boolean` 換成 `releaseType`，
+    // "release" 等同以前的 draft:false。)
+    releaseType: "release",
   },
 };

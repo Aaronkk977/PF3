@@ -3,9 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLayoutEffect, useRef, useState } from "react";
-import { Settings } from "lucide-react";
+import { Notebook, Settings } from "lucide-react";
+import { useNotesDrawer } from "@/components/notes/notes-drawer-context";
 import { NAV_PREFETCH, prefetchPage } from "@/lib/prefetch-page-data";
 import { cn } from "@/lib/utils";
+
+/** 對應 globals.css 的 .animate-gear-spin-once 動畫長度 */
+const GEAR_SPIN_MS = 350;
 
 const links = [
   { href: "/", label: "Overview" },
@@ -23,6 +27,7 @@ export function Nav() {
     null,
   );
   const [gearSpinning, setGearSpinning] = useState(false);
+  const { isOpen: notesOpen, toggle: toggleNotes } = useNotesDrawer();
 
   useLayoutEffect(() => {
     function measure() {
@@ -92,12 +97,32 @@ export function Nav() {
               </Link>
             ))}
           </nav>
+          {/* 筆記為工具性面板，不佔分頁位，用筆記本圖示叫出全站抽屜 */}
+          <button
+            type="button"
+            aria-label="Notes"
+            title="Notes"
+            onClick={toggleNotes}
+            className={cn(
+              "flex items-center justify-center rounded-md px-3 py-2 transition-colors",
+              notesOpen
+                ? "border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                : "text-[var(--color-muted)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-primary)]",
+            )}
+          >
+            <Notebook className="h-4 w-4" aria-hidden />
+          </button>
           {/* 設定為工具性頁面，不佔分頁位，用齒輪圖示（不參與滑動指示器） */}
           <Link
             href="/settings"
             aria-label="Settings"
             title="Settings"
-            onClick={() => setGearSpinning(true)}
+            onClick={() => {
+              setGearSpinning(true);
+              // 用 timeout 而非只靠 onAnimationEnd：若動畫因故未觸發（例如
+              // prefers-reduced-motion 之外的極端環境），狀態仍會自動歸位。
+              window.setTimeout(() => setGearSpinning(false), GEAR_SPIN_MS);
+            }}
             className={cn(
               "flex items-center justify-center rounded-md px-3 py-2 transition-colors",
               pathname === "/settings"

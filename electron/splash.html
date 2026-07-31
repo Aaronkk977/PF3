@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>Portfolio Performance</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Microsoft JhengHei UI", "Microsoft JhengHei", "Segoe UI", sans-serif;
+  }
+  .panel {
+    width: 420px;
+    height: 260px;
+    border-radius: 14px;
+    background: linear-gradient(160deg, #111827 0%, #0a0e17 65%);
+    border: 1px solid #1e3a5f;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    position: relative;
+    -webkit-app-region: drag;
+  }
+  .panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(0, 240, 255, 0.35), transparent 45%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .title {
+    font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #00f0ff;
+    text-shadow: 0 0 18px rgba(0, 240, 255, 0.45);
+    margin: 0 0 6px;
+  }
+  .subtitle {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: #5c7a9a;
+    text-transform: uppercase;
+    margin: 0 0 34px;
+  }
+  .spinner {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 3px solid rgba(0, 240, 255, 0.15);
+    border-top-color: #00f0ff;
+    animation: spin 0.9s linear infinite;
+    margin-bottom: 18px;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .phase {
+    font-size: 13px;
+    color: #9fb3c8;
+    min-height: 18px;
+    text-align: center;
+    transition: opacity 0.25s ease;
+  }
+  .phase.fading {
+    opacity: 0;
+  }
+  .error {
+    font-size: 12px;
+    color: #ff6b6b;
+    margin-top: 10px;
+    text-align: center;
+    max-width: 320px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="title">PORTFOLIO PERFORMANCE</div>
+    <div class="subtitle">Desktop</div>
+    <div class="spinner"></div>
+    <div class="phase" id="phase">連接伺服器中…</div>
+    <div class="error" id="error"></div>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const baseUrl = params.get("base") || "http://127.0.0.1:3847";
+
+  const PHASE_LABELS = {
+    idle: "準備中…",
+    "checking-splits": "檢查股票分割…",
+    "correcting-currencies": "校正幣別…",
+    "correcting-watchlist-names": "校正追蹤清單…",
+    done: "即將完成…",
+  };
+
+  const phaseEl = document.getElementById("phase");
+  const errorEl = document.getElementById("error");
+
+  function setPhaseText(text) {
+    if (phaseEl.textContent === text) return;
+    phaseEl.classList.add("fading");
+    setTimeout(() => {
+      phaseEl.textContent = text;
+      phaseEl.classList.remove("fading");
+    }, 150);
+  }
+
+  const START_TIME = Date.now();
+  const SLOW_WARNING_MS = 20_000;
+  let warned = false;
+
+  async function pollServerAlive() {
+    try {
+      await fetch(baseUrl, { cache: "no-store" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function pollStartupStatus() {
+    try {
+      const res = await fetch(`${baseUrl}/api/startup/status`, { cache: "no-store" });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function loop() {
+    if (!warned && Date.now() - START_TIME > SLOW_WARNING_MS) {
+      warned = true;
+      errorEl.textContent = "啟動時間比預期久，仍在等待伺服器準備就緒…";
+      errorEl.style.display = "block";
+    }
+
+    const alive = await pollServerAlive();
+    if (!alive) {
+      setPhaseText("連接伺服器中…");
+      setTimeout(loop, 400);
+      return;
+    }
+
+    const status = await pollStartupStatus();
+    if (status?.ready) {
+      setPhaseText("完成");
+      return; // main.js 會在準備好之後主動關閉這個視窗
+    }
+
+    setPhaseText(PHASE_LABELS[status?.phase] || "初始化中…");
+    setTimeout(loop, 400);
+  }
+
+  loop();
+</script>
+</body>
+</html>

@@ -1,3 +1,5 @@
+import { mapWithConcurrency } from "@/lib/async-pool";
+import { dbWriteLimiter } from "@/lib/concurrency-limiter";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_WATCHLIST_NAME,
@@ -99,8 +101,9 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
     instruments.map((i) => [i.symbol.toUpperCase(), i.name]),
   );
 
-  const nameUpdates: { id: string; name: string }[] = [];
-
+  // 這裡只用來「顯示」正確名稱，不在這裡把校正結果寫回資料庫——寫入交給
+  // startup-maintenance.ts 的 correctWatchlistItemNames()，跟頁面查詢脫鉤，
+  // 才不會每次載入頁面都多等一次寫入。
   const mappedLists = await Promise.all(
     lists.map(async (list) => ({
       id: list.id,
@@ -117,13 +120,6 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
             instrumentNames.get(symbol.toUpperCase()),
             quote?.name,
           ]);
-          if (
-            displayName &&
-            displayName !== symbol &&
-            displayName !== item.name
-          ) {
-            nameUpdates.push({ id: item.id, name: displayName });
-          }
           return {
             id: item.id,
             kind: "SYMBOL",
@@ -141,15 +137,53 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
     })),
   );
 
-  if (nameUpdates.length > 0) {
-    await Promise.all(
-      nameUpdates.map(({ id, name }) =>
-        prisma.watchlistItem.update({ where: { id }, data: { name } }),
-      ),
-    );
+  return mappedLists;
+}
+
+/** 校正追蹤清單項目的顯示名稱（跟解析出來的正確名稱對不上就修正）。獨立於
+ *  getWatchlists() 之外，由 startup-maintenance.ts 的開機維護排程呼叫，不在
+ *  一般頁面查詢的路徑上，避免每次載入頁面都多等一次寫入。 */
+export async function correctWatchlistItemNames(): Promise<void> {
+  const items = await prisma.watchlistItem.findMany({
+    where: { kind: "SYMBOL", symbol: { not: null } },
+    select: { id: true, symbol: true, name: true },
+  });
+  if (items.length === 0) return;
+
+  const allSymbols = [...new Set(items.map((i) => i.symbol!))];
+  const [quotes, instruments] = await Promise.all([
+    getQuotes(allSymbols),
+    prisma.instrument.findMany({
+      where: { symbol: { in: allSymbols } },
+      select: { symbol: true, name: true },
+    }),
+  ]);
+  const instrumentNames = new Map(
+    instruments.map((i) => [i.symbol.toUpperCase(), i.name]),
+  );
+
+  const updates: { id: string; name: string }[] = [];
+  for (const item of items) {
+    const symbol = item.symbol!;
+    const quote = quotes.get(symbol);
+    const displayName = await resolveInstrumentDisplayName(symbol, [
+      item.name,
+      instrumentNames.get(symbol.toUpperCase()),
+      quote?.name,
+    ]);
+    if (displayName && displayName !== symbol && displayName !== item.name) {
+      updates.push({ id: item.id, name: displayName });
+    }
   }
 
-  return mappedLists;
+  // low 優先權：這是開機維護排程觸發的背景工作，真正在等頁面資料的請求
+  // 應該優先拿到 dbWriteLimiter 的名額。
+  await mapWithConcurrency(
+    updates,
+    dbWriteLimiter,
+    ({ id, name }) => prisma.watchlistItem.update({ where: { id }, data: { name } }),
+    { priority: "low" },
+  );
 }
 
 /** @deprecated 使用 getWatchlists */

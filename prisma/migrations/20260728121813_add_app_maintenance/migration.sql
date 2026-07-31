@@ -1,0 +1,5 @@
+-- CreateTable
+CREATE TABLE "AppMaintenance" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT DEFAULT 1,
+    "lastRunAt" DATETIME
+);

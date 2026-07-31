@@ -355,7 +355,7 @@ html:not([data-theme]) body::before {
 }
 
 .animate-gear-spin-once {
-  animation: gear-spin-once 0.5s ease-in-out;
+  animation: gear-spin-once 0.35s ease-out;
 }
 
 @keyframes tw-limit-up-halo {
@@ -419,6 +419,15 @@ html:not([data-theme]) body::before {
 .markdown-body ol {
   margin: 0.5em 0;
   padding-left: 1.35em;
+}
+
+/* Tailwind preflight 把 ul/ol 的 list-style 重置成 none，這裡補回來才會顯示項目符號／數字 */
+.markdown-body ul {
+  list-style-type: disc;
+}
+
+.markdown-body ol {
+  list-style-type: decimal;
 }
 
 .markdown-body li {

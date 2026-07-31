@@ -687,6 +687,12 @@ export function TransactionsClient({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // 備註通常是使用者最後填的欄位，打完習慣性按 Enter 會直接觸發表單送出；
+    // 如果送出後（尤其是新標的要打外部 API 查名稱/價格，可能要等好幾秒）畫面
+    // 看起來沒反應，使用者常會再按一次 Enter 或點「新增交易」，若沒有這個
+    // 同步防護，disabled={loading} 在極端情況下可能來不及在第二次觸發前生效，
+    // 造成同一筆交易被送出兩次。
+    if (loading) return;
     if (
       sellExceedsHoldingWarning &&
       !window.confirm(`${sellExceedsHoldingWarning}\n\n確定要繼續新增這筆交易嗎？`)

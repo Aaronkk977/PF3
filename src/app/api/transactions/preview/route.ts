@@ -51,7 +51,9 @@ export async function GET(request: NextRequest) {
     try {
       const bars = await getHistoricalPrices(symbol, start, end);
       const bar = findCloseOnOrBefore(bars, dateStr);
-      price = bar?.close ?? null;
+      // Yahoo 的 close 是 32-bit float，序列化常常帶一長串浮點雜訊
+      // （例如 194.72999572753906），美股尤其明顯；四捨五入到分避免噴一堆小數位。
+      price = bar?.close != null ? Math.round(bar.close * 100) / 100 : null;
     } catch {
       price = null;
     }

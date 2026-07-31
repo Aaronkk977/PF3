@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { instrumentHref } from "@/lib/instrument-nav";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,12 @@ export type EditableTransaction = {
   note: string | null;
 };
 
-type AccountOption = { id: string; name: string; currency: string };
+type AccountOption = {
+  id: string;
+  name: string;
+  currency: string;
+  feeTaxRoundHalfUp?: boolean;
+};
 
 export function TransactionRow({
   tx,
@@ -106,6 +112,7 @@ export function TransactionRow({
   );
 
   async function save() {
+    if (saving) return;
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -141,6 +148,37 @@ export function TransactionRow({
       onSaved();
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** 買／賣的手續費、稅率通常不一樣（帳戶設定裡有分開的買進/賣出費率），改交易
+   *  類型後舊的手續費／稅金額不會自動跟著變，容易漏改造成金額錯誤——這裡改
+   *  類型時直接照目前的標的／數量／單價／日期重新查一次費率並覆蓋掉。 */
+  async function handleTypeChange(nextType: string) {
+    setForm((f) => ({ ...f, type: nextType }));
+    if (CASH_TYPES.has(nextType)) return;
+    if (!form.symbol || !form.quantity || !form.price || !form.accountId) return;
+    const nextAccount = accounts.find((a) => a.id === form.accountId);
+    try {
+      const params = new URLSearchParams({
+        symbol: form.symbol,
+        date: form.date,
+        type: nextType,
+        accountId: form.accountId,
+        quantity: form.quantity,
+        price: form.price,
+        roundHalfUp: nextAccount?.feeTaxRoundHalfUp ? "1" : "0",
+      });
+      const res = await fetch(`/api/transactions/preview?${params}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { fee: number; tax: number };
+      setForm((f) =>
+        f.type === nextType
+          ? { ...f, fee: formatFeeTaxAmount(data.fee), tax: formatFeeTaxAmount(data.tax) }
+          : f,
+      );
+    } catch {
+      // 查詢失敗就保留原本的手續費／稅，使用者仍可手動調整
     }
   }
 
@@ -203,7 +241,7 @@ export function TransactionRow({
               </label>
               <Select
                 value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value })}
+                onChange={(e) => void handleTypeChange(e.target.value)}
               >
                 <option value="BUY">BUY</option>
                 <option value="SELL">SELL</option>
@@ -285,26 +323,37 @@ export function TransactionRow({
               />
             </div>
           </div>
-          <div className="mt-3 flex gap-2">
-            <Button type="button" onClick={save} disabled={saving}>
-              {saving ? "儲存中..." : "儲存"}
-            </Button>
-            <Button
+          <div className="mt-3 flex items-center gap-1">
+            <button
               type="button"
-              variant="ghost"
+              onClick={save}
+              disabled={saving}
+              aria-label="儲存"
+              title="儲存"
+              className="rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] hover:text-[var(--color-primary)] disabled:opacity-50"
+            >
+              <Save className="h-4 w-4" aria-hidden />
+            </button>
+            <button
+              type="button"
               onClick={onCancelEdit}
               disabled={saving}
+              aria-label="取消"
+              title="取消"
+              className="rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-primary)] disabled:opacity-50"
             >
-              取消
-            </Button>
-            <Button
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+            <button
               type="button"
-              variant="accent"
               onClick={remove}
               disabled={saving}
+              aria-label="刪除"
+              title="刪除"
+              className="rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-negative)_12%,transparent)] hover:text-[var(--color-negative)] disabled:opacity-50"
             >
-              刪除
-            </Button>
+              <Trash2 className="h-4 w-4" aria-hidden />
+            </button>
           </div>
         </td>
       </tr>

@@ -1,9 +1,10 @@
 import "server-only";
 
 import YahooFinance from "yahoo-finance2";
+import { mapWithConcurrency } from "@/lib/async-pool";
+import { dbWriteLimiter, externalReadLimiter } from "@/lib/concurrency-limiter";
 import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
-import { isTaiwanMarketClosed } from "@/lib/market-session";
 import { fetchWithShortTimeout } from "@/lib/http-fetch";
 import {
   isCryptoSymbol,
@@ -21,12 +22,17 @@ const TAIWAN_VIX_SYMBOL = "VIXTWN";
 const TAIWAN_VIX_QUOTE_LIST_URL =
   "https://mis.taifex.com.tw/futures/api/getQuoteListVIX";
 const TAIWAN_VIX_LIST_URL = "https://www.bq888.taifex.com.tw/cht/7/vixMinNew";
+/** 加權指數：Yahoo 的日線 chart 偶爾會漏掉某個交易日（close 為 null），
+ *  導致算漲跌幅時誤用更早之前的收盤價當「昨收」。缺口出現時改查證交所
+ *  官方「大盤統計資訊」報表校正。 */
+const TAIEX_SYMBOL = "^TWII";
 
-/** 序列化 PriceCache 寫入，避免多標的並行 upsert 造成 SQLite 鎖定逾時 */
-let priceCacheWriteChain: Promise<void> = Promise.resolve();
-
+/** PriceCache 寫入一律排進全域共用的 dbWriteLimiter，避免多標的並行 upsert
+ *  造成 SQLite 鎖定逾時——不 await（呼叫端不用等寫入真的完成），但仍佔用
+ *  dbWriteLimiter 的名額，所以會跟其他批次寫入（例如股票分割）正確共享同一個
+ *  全域上限，不會加總超標。 */
 function enqueuePriceCacheWrite(work: () => Promise<void>): void {
-  priceCacheWriteChain = priceCacheWriteChain.then(work).catch((e) => {
+  dbWriteLimiter.run(work).catch((e) => {
     console.error("priceCache persist failed", e);
   });
 }
@@ -103,7 +109,12 @@ function inferAssetClass(symbol: string): string {
 type ChartResponse = {
   chart?: {
     result?: Array<{
-      meta?: { currency?: string; shortName?: string; longName?: string };
+      meta?: {
+        currency?: string;
+        shortName?: string;
+        longName?: string;
+        regularMarketPrice?: number;
+      };
       timestamp?: number[];
       indicators?: {
         quote?: Array<{
@@ -114,9 +125,44 @@ type ChartResponse = {
           volume?: (number | null)[];
         }>;
       };
+      events?: {
+        splits?: Record<string, { date: number; numerator: number; denominator: number }>;
+      };
     }>;
   };
 };
+
+export type SplitEvent = { date: Date; numerator: number; denominator: number };
+
+/** 抓某標的完整歷史的股票分割事件（不只是最近的，避免第一次跑漏掉舊分割）
+ *
+ *  `events.splits` 是完整回傳的，跟 interval 疏密無關，但價格陣列會照 interval
+ *  一起送過來——用 1d 等於為了幾個分割事件下載整份日線（實測 AAPL 1.24 MB、
+ *  LMT 1.40 MB，開機維護光這段就要拉幾十 MB）。改用 1wk 後同樣的資料只剩約
+ *  五分之一（AAPL 265 KB）。不再往下調是因為實測 1mo／3mo 的序列起點會被
+ *  Yahoo 砍到 1985 年，早於此的分割會整筆消失（BA 的 1977-09-13 2:1 就是這樣
+ *  掉的，1d 與 1wk 都抓得到，1mo／3mo 抓不到）。 */
+export async function fetchSplitEvents(symbol: string): Promise<SplitEvent[]> {
+  try {
+    const quoteSymbol = resolveYahooQuoteSymbol(symbol);
+    const period2 = Math.floor(Date.now() / 1000);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(quoteSymbol)}?period1=0&period2=${period2}&interval=1wk&events=split`;
+    const res = await fetchWithTimeout(url, { next: { revalidate: 86400 } });
+    if (!res?.ok) return [];
+
+    const data = (await res.json()) as ChartResponse;
+    const splits = data.chart?.result?.[0]?.events?.splits;
+    if (!splits) return [];
+
+    return Object.values(splits).map((s) => ({
+      date: new Date(s.date * 1000),
+      numerator: s.numerator,
+      denominator: s.denominator,
+    }));
+  } catch {
+    return [];
+  }
+}
 
 async function fetchChartForQuoteSymbol(
   quoteSymbol: string,
@@ -202,29 +248,216 @@ async function getDayChangeFromChart(
   start.setDate(start.getDate() - 14);
   const bars = await fetchChart(symbol, start, end);
   if (bars.length < 2) return null;
-  
-  // Only compute today's change if we have today's bar.
-  // Otherwise, if today has no data yet (market not open), return null.
-  const today = toLocalDateKey(end);
-  const lastBar = bars[bars.length - 1];
-  if (lastBar.date !== today) {
-    // Today's market has not yet reported; don't use previous day's change.
-    return null;
-  }
-  
+
+  // 不再要求「最新一根必須等於伺服器本地日曆的今天」：這個比較用的是台灣
+  // 本地時區，對美股來說幾乎永遠對不上（美股交易日換算成台灣日期時，幾乎
+  // 都落在「昨天」），會導致明明剛抓到最新資料卻被判定為不可用、白白退回
+  // 舊快取。改為直接信任 Yahoo 回傳的最後兩根，不論它們對應到哪個日曆日。
   return computeChangeFromBars(bars);
   } catch {
     return null;
   }
 }
 
+type ChartSnapshot = {
+  meta: { currency?: string; name?: string; price?: number } | null;
+  bars: OhlcBar[];
+  /** 若最新一根有效 close 前面緊鄰著一個 null（缺口），這裡是那個缺口日期
+   *  的 YYYYMMDD；否則是 undefined。目前只給 ^TWII 拿去查證交所校正用。 */
+  gapDateKey?: string;
+  /** 時間軸最後一格（最新交易日）的 close 是不是 null——盤中會即時更新這格
+   *  （美股尤其明顯，跟 meta.regularMarketPrice 幾乎同步），但有些市場（實測
+   *  台股尤其明顯）收盤後這格常常要好幾個小時才補上真正的收盤價，這段空窗期
+   *  這裡會是 true，代表 bars 陣列裡最新一根有效 close 其實還停在「前一個」
+   *  交易日，比 meta.regularMarketPrice 舊了一整天。 */
+  latestBarPending: boolean;
+};
+
+/** 單一請求同時取得 meta（名稱／幣別／現價）與日線 K 棒，避免多打一次請求。 */
+async function fetchChartSnapshot(quoteSymbol: string): Promise<ChartSnapshot | null> {
+  try {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 14);
+    const period1 = Math.floor(start.getTime() / 1000);
+    const period2 = Math.floor(end.getTime() / 1000);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(quoteSymbol)}?period1=${period1}&period2=${period2}&interval=1d`;
+    const res = await fetchWithTimeout(url, { next: { revalidate: 900 } });
+    if (!res?.ok) return null;
+
+    const data = (await res.json()) as ChartResponse;
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta = result.meta
+      ? {
+          currency: result.meta.currency,
+          name: result.meta.longName ?? result.meta.shortName,
+          price: result.meta.regularMarketPrice,
+        }
+      : null;
+
+    const bars: OhlcBar[] = [];
+    const quotes = result.indicators?.quote?.[0];
+    const rawCloses = quotes?.close ?? [];
+    if (result.timestamp && quotes) {
+      for (let i = 0; i < result.timestamp.length; i++) {
+        const close = quotes.close?.[i];
+        if (close == null) continue;
+        bars.push({
+          date: toLocalDateKey(new Date(result.timestamp[i] * 1000)),
+          open: quotes.open?.[i] ?? close,
+          high: quotes.high?.[i] ?? close,
+          low: quotes.low?.[i] ?? close,
+          close,
+          volume: quotes.volume?.[i] ?? undefined,
+        });
+      }
+    }
+
+    let gapDateKey: string | undefined;
+    let lastValidIdx = -1;
+    for (let i = rawCloses.length - 1; i >= 0; i--) {
+      if (rawCloses[i] != null) {
+        lastValidIdx = i;
+        break;
+      }
+    }
+    if (lastValidIdx > 0 && rawCloses[lastValidIdx - 1] == null) {
+      const gapTs = result.timestamp?.[lastValidIdx - 1];
+      if (gapTs != null) {
+        gapDateKey = toLocalDateKey(new Date(gapTs * 1000)).replace(/-/g, "");
+      }
+    }
+
+    const latestBarPending =
+      rawCloses.length > 0 && rawCloses[rawCloses.length - 1] == null;
+
+    return { meta, bars, gapDateKey, latestBarPending };
+  } catch {
+    return null;
+  }
+}
+
+function isTaiexSymbol(symbol: string): boolean {
+  return symbol.trim().toUpperCase() === TAIEX_SYMBOL;
+}
+
+/** 查證交所官方「大盤統計資訊」報表，取得指定日期的加權指數收盤值 */
+async function fetchTaiexOfficialClose(dateKey: string): Promise<number | null> {
+  try {
+    const url = `https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date=${dateKey}&type=IND`;
+    const res = await fetchWithTimeout(url, { next: { revalidate: 3600 } });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as { tables?: Array<{ data?: string[][] }> };
+    const rows = data.tables?.[0]?.data;
+    const row = rows?.find((r) => r[0] === "發行量加權股價指數");
+    const closeStr = row?.[1];
+    if (!closeStr) return null;
+    const close = Number(closeStr.replace(/,/g, ""));
+    return Number.isFinite(close) && close > 0 ? close : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 把校正過的加權指數缺口收盤值補進 PriceCache，避免歷史圖表也留著同一個洞 */
+function persistTaiexGapClose(dateKey: string, close: number): void {
+  const date = startOfDay(
+    new Date(`${dateKey.slice(0, 4)}-${dateKey.slice(4, 6)}-${dateKey.slice(6, 8)}`),
+  );
+  enqueuePriceCacheWrite(async () => {
+    await prisma.priceCache.upsert({
+      where: { symbol_date: { symbol: TAIEX_SYMBOL, date } },
+      create: { symbol: TAIEX_SYMBOL, date, open: close, high: close, low: close, close },
+      update: { open: close, high: close, low: close, close, cachedAt: new Date() },
+    });
+  });
+}
+
+/**
+ * 不需要 crumb 的即時報價：價格／名稱／幣別／漲跌全部來自單一 chart 端點請求
+ * （不受 .quote() 的 crumb 限流影響）。當作 getQuote 的主要資料來源，
+ * .quote() 只在這條路失敗時當備援用。
+ */
+async function getLiveQuoteFromChart(symbol: string): Promise<QuoteResult | null> {
+  const primary = resolveYahooQuoteSymbol(symbol);
+  let snapshot = await fetchChartSnapshot(primary);
+  if (
+    (!snapshot || snapshot.bars.length === 0) &&
+    primary !== symbol.trim() &&
+    !symbol.includes("-")
+  ) {
+    snapshot = await fetchChartSnapshot(symbol.trim());
+  }
+  if (!snapshot) return null;
+
+  let dayChange = computeChangeFromBars(snapshot.bars);
+  let price = dayChange?.price ?? snapshot.meta?.price;
+  if (!price || price <= 0) return null;
+
+  // Yahoo 的日線 K 棒收盤值有時會比 meta.regularMarketPrice 慢好幾個小時才
+  // 補齊——尤其台股收盤後到隔天凌晨這段時間，常常已經查得到「今天」這根
+  // K 棒的時間戳記，但 close 欄位還是 null（latestBarPending），於是
+  // computeChangeFromBars 只能拿「前一天 vs 前兩天」這組舊資料算漲跌，等於
+  // 把漲跌幅算成整整多一個交易日的落差（實測看過因此把 -1% 左右的正常波動
+  // 算成快要漲停的離譜數字）。這種情況才改用 meta 的即時價格當現價、K 棒的
+  // 價格當昨收，重新算一次漲跌。
+  //
+  // 這裡刻意不是「meta 跟 K 棒價格對不上就換」——美股盤中 Yahoo 會把「今天」
+  // 這根還沒收盤的 K 棒即時更新到幾乎等於 meta（只差浮點誤差），若用價格差
+  // 當判斷依據，會把這點誤差誤判成「K 棒落後」，結果把本來就是今天的 K 棒
+  // 錯當成昨天，拿今天的即時價跟自己相減，把真正的當日漲跌洗成 0%。
+  // latestBarPending 是 Yahoo 明確告訴我們「最新這格是 null」的訊號，不受
+  // 這種盤中即時更新的雜訊影響。
+  if (dayChange && snapshot.latestBarPending && snapshot.meta?.price != null && snapshot.meta.price > 0) {
+    const metaPrice = snapshot.meta.price;
+    const prevClose = dayChange.price;
+    const change = metaPrice - prevClose;
+    dayChange = {
+      price: metaPrice,
+      change,
+      changePercent: prevClose > 0 ? change / prevClose : 0,
+    };
+    price = metaPrice;
+  }
+
+  if (isTaiexSymbol(symbol) && snapshot.gapDateKey) {
+    const officialPrevClose = await fetchTaiexOfficialClose(snapshot.gapDateKey);
+    if (officialPrevClose) {
+      const change = price - officialPrevClose;
+      dayChange = { price, change, changePercent: change / officialPrevClose };
+      persistTaiexGapClose(snapshot.gapDateKey, officialPrevClose);
+    }
+  }
+
+  return {
+    symbol,
+    name: snapshot.meta?.name,
+    currency: snapshot.meta?.currency,
+    price,
+    change: dayChange?.change,
+    changePercent: dayChange?.changePercent,
+    previousClose: dayChange ? price - dayChange.change : undefined,
+  };
+}
+
+/**
+ * @param maxAgeDays 快取最舊可以是幾天前，超過就不採用。
+ *   兩種呼叫情境需要不同寬鬆度：
+ *   - 純備援（其他資料來源都已失敗）：傳 Infinity，再舊的快取也比完全沒有好
+ *     （呼叫端會自行標記 stale，使用者看得出來這不是即時資料）。
+ *   - 決定要不要拿快取「覆蓋」剛成功拿到的即時報價：必須夠新（幾天內）才能
+ *     覆蓋，否則會變成用陳年舊資料蓋掉這次明明抓到的新資料。
+ */
 async function getDayChangeFromCache(
   symbol: string,
+  maxAgeDays: number,
 ): Promise<{ price: number; change: number; changePercent: number } | null> {
   const quoteSymbol = resolveYahooQuoteSymbol(symbol);
   const candidates = [...new Set([symbol.trim(), quoteSymbol])];
-  const today = toLocalDateKey(new Date());
-  
+  const now = Date.now();
+
   for (const sym of candidates) {
     const rows = await prisma.priceCache.findMany({
       where: { symbol: sym },
@@ -233,15 +466,12 @@ async function getDayChangeFromCache(
     });
     if (rows.length < 2) continue;
     const [latest, previous] = rows;
-    
-    // Only use this data if latest is from today.
-    // Otherwise, if today has no data yet (market not open), return null.
-    const latestDateStr = toLocalDateKey(latest.date);
-    if (latestDateStr !== today) {
-      // Today's market has not yet reported; don't use previous day's change.
+
+    const ageDays = (now - latest.date.getTime()) / (24 * 60 * 60 * 1000);
+    if (ageDays > maxAgeDays) {
       continue;
     }
-    
+
     if (latest.close <= 0 || previous.close <= 0) continue;
     const change = latest.close - previous.close;
     return {
@@ -382,19 +612,13 @@ export async function syncVixHistory(
     (d) => d >= startKey && d <= endKey && !existingKeys.has(d),
   );
 
-  // 並行抓取（concurrency=8）
-  const CONCURRENCY = 8;
-  for (let i = 0; i < missing.length; i += CONCURRENCY) {
-    const batch = missing.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map(async (dateKey) => {
-        const value = await fetchTaiwanVixDailyClose(dateKey);
-        if (value != null && value > 0) {
-          await persistVixClose(dateKey, value);
-        }
-      }),
-    );
-  }
+  // 並行抓取，共用全域對外讀取上限
+  await mapWithConcurrency(missing, externalReadLimiter, async (dateKey) => {
+    const value = await fetchTaiwanVixDailyClose(dateKey);
+    if (value != null && value > 0) {
+      await persistVixClose(dateKey, value);
+    }
+  });
 
   // 重新從 DB 讀取（含剛寫入的）
   const rows = await prisma.priceCache.findMany({
@@ -641,33 +865,39 @@ export async function getWeekChangePercents(
   symbols: string[],
 ): Promise<Map<string, number | null>> {
   const unique = [...new Set(symbols.map((s) => s.trim().toUpperCase()))];
-  const entries = await Promise.all(
-    unique.map(async (sym) => [sym, await getWeekChangeFromChart(sym)] as const),
+  const entries = await mapWithConcurrency(
+    unique,
+    externalReadLimiter,
+    async (sym) => [sym, await getWeekChangeFromChart(sym)] as const,
   );
   return new Map(entries);
 }
 
 export async function validateSymbol(symbol: string): Promise<QuoteResult | null> {
+  if (isTaiwanVixSymbol(symbol)) {
+    return fetchTaiwanVixQuote();
+  }
   try {
-    if (isTaiwanVixSymbol(symbol)) {
-      return fetchTaiwanVixQuote();
-    }
     const quote = await yahooQuote(resolveYahooQuoteSymbol(symbol));
     const price = quote ? extractYahooPrice(quote) : 0;
-    if (!quote || price <= 0) return null;
-    return {
-      symbol: quote.symbol ?? symbol,
-      name: quote.shortName ?? quote.longName,
-      price,
-      currency: quote.currency,
-      change: quote.regularMarketChange,
-      changePercent: normalizeYahooChangePercent(
-        quote.regularMarketChangePercent,
-      ),
-    };
+    if (quote && price > 0) {
+      return {
+        symbol: quote.symbol ?? symbol,
+        name: quote.shortName ?? quote.longName,
+        price,
+        currency: quote.currency,
+        change: quote.regularMarketChange,
+        changePercent: normalizeYahooChangePercent(
+          quote.regularMarketChangePercent,
+        ),
+      };
+    }
   } catch {
-    return null;
+    // 退回不需要 crumb 的 chart 端點，見下方
   }
+  // .quote() 失敗或被限流時，改用不需要 crumb 的 chart 端點驗證，
+  // 確保 .quote() 被擋期間仍能正常新增追蹤標的。
+  return getLiveQuoteFromChart(symbol).catch(() => null);
 }
 
 /** 追蹤清單加入：盤後／週末仍盡力取得可驗證報價 */
@@ -747,8 +977,10 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
 
   const quoteSymbol = resolveYahooQuoteSymbol(symbol);
   const cached = await getLatestCachedClose(symbol);
-  const isTw = isTaiwanStockSymbol(symbol);
 
+  // fetchChart 打的是不需要 crumb 的 v8/finance/chart 端點，即使 yahoo-finance2
+  // 的 .quote()（需要 crumb）被限流，這條路仍可能正常拿到即時資料——因此只有
+  // 真的退回資料庫舊快取時才標記 stale，chart 端點成功時不算 stale。
   const fromChartOrCache = async (): Promise<QuoteResult | null> => {
     try {
       const fromChart = await getDayChangeFromChart(symbol);
@@ -760,51 +992,41 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
           changePercent: fromChart.changePercent,
         };
       }
-      const fromCache = await getDayChangeFromCache(symbol);
+      const fromCache = await getDayChangeFromCache(symbol, Infinity);
       if (fromCache) {
         return {
           symbol,
           price: fromCache.price,
           change: fromCache.change,
           changePercent: fromCache.changePercent,
+          stale: true,
         };
       }
       if (cached != null) {
-        return { symbol, price: cached };
+        return { symbol, price: cached, stale: true };
       }
     } catch {
       if (cached != null) {
-        return { symbol, price: cached };
+        return { symbol, price: cached, stale: true };
       }
     }
     return null;
   };
 
-  if (isTw && isTaiwanMarketClosed()) {
-    const fromChart = await getDayChangeFromChart(symbol);
-    if (fromChart) {
-      const meta = await yahooQuote(quoteSymbol);
-      return {
-        symbol,
-        name: meta?.shortName ?? meta?.longName,
-        currency: meta?.currency,
-        price: fromChart.price,
-        change: fromChart.change,
-        changePercent: fromChart.changePercent,
-        previousClose:
-          fromChart.price > 0 && fromChart.change != null
-            ? fromChart.price - fromChart.change
-            : undefined,
-      };
-    }
+  // 主要資料來源：不需要 crumb 的 chart 端點，price/change/name/currency 都從
+  // 這裡拿，平時穩定、也不受 .quote() 被限流影響；只有它失敗時才退回
+  // .quote()／資料庫快取的舊邏輯當備援。
+  const live = await getLiveQuoteFromChart(symbol);
+  if (live) {
+    return live;
   }
 
   try {
     const quote = await yahooQuote(quoteSymbol);
     if (!quote) {
       const fallback = await fromChartOrCache();
-      const base = fallback ?? { symbol, price: cached ?? 0 };
-      return applyTaiwanQuoteClose(symbol, { ...base, stale: true }, undefined);
+      const base = fallback ?? { symbol, price: cached ?? 0, stale: true };
+      return applyTaiwanQuoteClose(symbol, base, undefined);
     }
     const price = extractYahooPrice(quote) || cached || 0;
     let change = quote.regularMarketChange ?? undefined;
@@ -814,8 +1036,9 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
     // Yahoo's regularMarketPreviousClose can lag by a day when a bar is missing
     // in Yahoo's own chart (e.g. ^TWII on public holidays where Yahoo stores null).
     // If our cache has today's close AND a previous close, prefer that for the
-    // change/changePercent calculation — it's unambiguous.
-    const cacheChange = await getDayChangeFromCache(symbol);
+    // change/changePercent calculation — it's unambiguous. 這裡的快取要「夠新」
+    // 才能拿來覆蓋剛成功拿到的即時報價，避免用陳年舊資料蓋掉新資料。
+    const cacheChange = await getDayChangeFromCache(symbol, 2);
     let changePercent: number | undefined;
     if (cacheChange?.changePercent != null) {
       change = cacheChange.change;
@@ -841,6 +1064,7 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
             currency: quote.currency,
             change: fallback.change,
             changePercent: fallback.changePercent,
+            stale: fallback.stale,
           },
           prev,
         );
@@ -862,7 +1086,7 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
   } catch {
     const fallback = await fromChartOrCache();
     if (fallback) {
-      return applyTaiwanQuoteClose(symbol, { ...fallback, stale: true }, undefined);
+      return applyTaiwanQuoteClose(symbol, fallback, undefined);
     }
     return { symbol, price: 0, stale: true };
   }

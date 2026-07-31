@@ -1,4 +1,6 @@
 import { computeAllAccountsCash } from "@/lib/accounts";
+import { mapWithConcurrency } from "@/lib/async-pool";
+import { dbWriteLimiter } from "@/lib/concurrency-limiter";
 import { prisma } from "@/lib/db";
 import {
   BASE_CURRENCY,
@@ -99,7 +101,6 @@ export async function getHoldings(): Promise<HoldingPosition[]> {
   const quotes = await getQuotes(symbols);
 
   const positions: HoldingPosition[] = [];
-  const currencyUpdates: { id: string; currency: string }[] = [];
 
   for (const inst of instruments) {
     const securityTxs = inst.transactions.filter(
@@ -115,14 +116,14 @@ export async function getHoldings(): Promise<HoldingPosition[]> {
     }));
 
     const quote = quotes.get(inst.symbol);
+    // 這裡只用即時報價的幣別「顯示」正確幣別，不在這裡把校正結果寫回資料庫
+    // ——寫入交給 startup-maintenance.ts 的 correctInstrumentCurrencies()，
+    // 跟頁面查詢脫鉤，才不會每次載入頁面都多等一次寫入。
     const currency = inferInstrumentCurrency(
       inst.symbol,
       inst.currency,
       quote?.currency,
     );
-    if (currency !== inst.currency) {
-      currencyUpdates.push({ id: inst.id, currency });
-    }
 
     const marketFromQuote =
       quote?.price && quote.price > 0 ? quote.price : 0;
@@ -236,13 +237,39 @@ export async function getHoldings(): Promise<HoldingPosition[]> {
     p.weight = totalValue > 0 ? p.marketValueBase / totalValue : 0;
   }
 
-  await Promise.all(
-    currencyUpdates.map(({ id, currency }) =>
-      prisma.instrument.update({ where: { id }, data: { currency } }),
-    ),
-  );
-
   return positions.sort((a, b) => b.marketValueBase - a.marketValueBase);
+}
+
+/** 校正資料庫裡標的的幣別欄位（跟即時報價的幣別對不上就修正）。獨立於
+ *  getHoldings() 之外，由 startup-maintenance.ts 的開機維護排程呼叫，不在
+ *  一般頁面查詢的路徑上，避免每次載入頁面都多等一次寫入。 */
+export async function correctInstrumentCurrencies(): Promise<void> {
+  const instruments = await prisma.instrument.findMany({
+    select: { id: true, symbol: true, currency: true },
+  });
+  const quotes = await getQuotes(instruments.map((i) => i.symbol));
+
+  const updates: { id: string; currency: string }[] = [];
+  for (const inst of instruments) {
+    const currency = inferInstrumentCurrency(
+      inst.symbol,
+      inst.currency,
+      quotes.get(inst.symbol)?.currency,
+    );
+    if (currency !== inst.currency) {
+      updates.push({ id: inst.id, currency });
+    }
+  }
+
+  // low 優先權：這是開機維護排程觸發的背景工作，真正在等頁面資料的請求
+  // 應該優先拿到 dbWriteLimiter 的名額。
+  await mapWithConcurrency(
+    updates,
+    dbWriteLimiter,
+    ({ id, currency }) =>
+      prisma.instrument.update({ where: { id }, data: { currency } }),
+    { priority: "low" },
+  );
 }
 
 export async function getPortfolioSummary(

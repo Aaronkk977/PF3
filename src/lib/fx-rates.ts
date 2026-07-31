@@ -184,9 +184,12 @@ async function fetchYahooHistoricalRate(
   return null;
 }
 
+const historicalRateInFlight = new Map<string, Promise<number | null>>();
+
 /**
- * 指定日期的交叉匯率（每 1 from = ? to）
- * 若無歷史資料則退回即期匯率
+ * 指定日期的交叉匯率（每 1 from = ? to）。過去的收盤匯率不會變，成功查到
+ * 就永久寫入 FxRateHistory，之後同一天不會再打 Yahoo。若無歷史資料則退回
+ * 即期匯率（這個 fallback 不會被當成該日期的真實匯率快取起來）。
  */
 export async function getExchangeRateOnDate(
   from: string,
@@ -197,38 +200,47 @@ export async function getExchangeRateOnDate(
   const t = normalizeCurrencyCode(to);
   if (f === t) return 1;
 
-  const stale = await prisma.fxRateCache.findUnique({
-    where: { pair: cachePairKey(f, t) },
+  const pair = cachePairKey(f, t);
+  const dateKey = toLocalDateKey(date);
+
+  const cached = await prisma.fxRateHistory.findUnique({
+    where: { pair_dateKey: { pair, dateKey } },
   });
-  if (stale?.rate && stale.rate > 0) {
-    // 先備用快取，避免歷史 API 連線逾時時整頁卡住
-    const targetKey = toLocalDateKey(date);
+  if (cached && cached.rate > 0) return cached.rate;
+
+  const inFlightKey = `${pair}_${dateKey}`;
+  const pending = historicalRateInFlight.get(inFlightKey);
+  if (pending) return pending;
+
+  const work = (async () => {
     const period1 = Math.floor(date.getTime() / 1000) - 21 * 86400;
     const period2 = Math.floor(date.getTime() / 1000) + 86400;
 
     const historical = await fetchYahooHistoricalRate(
       f,
       t,
-      targetKey,
+      dateKey,
       period1,
       period2,
     );
-    if (historical != null && historical > 0) return historical;
-    return stale.rate;
+    if (historical != null && historical > 0) {
+      await prisma.fxRateHistory
+        .upsert({
+          where: { pair_dateKey: { pair, dateKey } },
+          create: { pair, dateKey, rate: historical },
+          update: { rate: historical },
+        })
+        .catch(() => {});
+      return historical;
+    }
+
+    return getExchangeRate(f, t);
+  })();
+
+  historicalRateInFlight.set(inFlightKey, work);
+  try {
+    return await work;
+  } finally {
+    historicalRateInFlight.delete(inFlightKey);
   }
-
-  const targetKey = toLocalDateKey(date);
-  const period1 = Math.floor(date.getTime() / 1000) - 21 * 86400;
-  const period2 = Math.floor(date.getTime() / 1000) + 86400;
-
-  const historical = await fetchYahooHistoricalRate(
-    f,
-    t,
-    targetKey,
-    period1,
-    period2,
-  );
-  if (historical != null && historical > 0) return historical;
-
-  return getExchangeRate(f, t);
 }

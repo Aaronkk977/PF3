@@ -37,8 +37,28 @@ model Instrument {
   taxRatePct   Float?
   transactions Transaction[]
   tags         TagOnInstrument[]
+  noteLinks    NoteOnInstrument[]
+  splits       Split[]
+  /** 上次檢查股票分割的時間，避免每次載入都打 Yahoo（24 小時冷卻） */
+  splitsCheckedAt DateTime?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt @default(now())
+}
+
+/** 股票分割稽核記錄：偵測到分割時，該支股票分割日之前的所有交易會被改寫
+ *  （quantity ×= numerator/denominator，price ×= denominator/numerator），
+ *  這裡記錄「哪支股票、哪天分割過」避免重複套用。 */
+model Split {
+  id           String     @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  splitDate    DateTime
+  numerator    Int
+  denominator  Int
+  appliedAt    DateTime   @default(now())
+
+  @@unique([instrumentId, splitDate])
+  @@index([instrumentId])
 }
 
 model Watchlist {
@@ -70,6 +90,7 @@ model Tag {
   id          String            @id @default(cuid())
   name        String            @unique
   instruments TagOnInstrument[]
+  noteLinks   NoteOnTag[]
 }
 
 model TagOnInstrument {
@@ -79,6 +100,56 @@ model TagOnInstrument {
   tag          Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([instrumentId, tagId])
+}
+
+/** 筆記類型：使用者可自行新增／刪除，含三個系統預設值（種子資料）。
+  * Note.kind 只存名稱字串（不是外鍵），刪除一個類型不會動到已使用該類型的
+  * 舊筆記，只是它從此不再出現在新增筆記的下拉選單裡。 */
+model NoteKind {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model Note {
+  id       String   @id @default(cuid())
+  title    String
+  /** Markdown 內容 */
+  content  String
+  /** 筆記類型名稱（對應 NoteKind.name，非外鍵） */
+  kind     String
+  /** 筆記日期，預設今天，使用者可編輯，用於排序與複盤 */
+  noteDate DateTime @default(now())
+
+  instruments NoteOnInstrument[]
+  tags        NoteOnTag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@index([kind])
+  @@index([noteDate])
+}
+
+model NoteOnInstrument {
+  noteId       String
+  instrumentId String
+  note         Note       @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, instrumentId])
+  @@index([instrumentId])
+}
+
+model NoteOnTag {
+  noteId String
+  tagId  String
+  note   Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, tagId])
+  @@index([tagId])
 }
 
 model Transaction {
@@ -109,6 +180,18 @@ model FxRateCache {
   cachedAt DateTime @default(now())
 }
 
+/** 特定日期的歷史匯率快取，過去的收盤匯率不會變，永久快取（不像
+ *  FxRateCache 的即期匯率需要 TTL），避免每次算成本基礎都重打 Yahoo。 */
+model FxRateHistory {
+  id      String @id @default(cuid())
+  pair    String
+  dateKey String
+  rate    Float
+
+  @@unique([pair, dateKey])
+  @@index([pair])
+}
+
 model PerformanceSnapshot {
   id              String   @id @default(cuid())
   cacheKey        String   @unique
@@ -135,6 +218,14 @@ model Benchmark {
   id     String @id @default(cuid())
   symbol String @unique
   label  String
+}
+
+/// 單一列（id 固定為 1）：記錄「開機維護」（股票分割偵測＋幣別／追蹤清單
+/// 名稱校正）上次跑完的時間，跟頁面資料查詢完全脫鉤，靠這個時間戳記做
+/// 24 小時冷卻，而不是每個頁面各自觸發一次。
+model AppMaintenance {
+  id        Int      @id @default(1)
+  lastRunAt DateTime?
 }
 
 model PriceCache {

@@ -1,4 +1,5 @@
 import { mapWithConcurrency } from "@/lib/async-pool";
+import { externalReadLimiter } from "@/lib/concurrency-limiter";
 import { periodStartWithPriceLookback, toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import { normalizeCurrencyCode } from "@/lib/fx";
@@ -73,7 +74,7 @@ async function buildPriceMaps(
 ): Promise<Map<string, Map<string, number>>> {
   const maps = new Map<string, Map<string, number>>();
   if (symbols.length === 0) return maps;
-  await mapWithConcurrency(symbols, 2, async (symbol) => {
+  await mapWithConcurrency(symbols, externalReadLimiter, async (symbol) => {
     const bars = await getHistoricalPrices(
       symbol,
       periodStartWithPriceLookback(periodStart),

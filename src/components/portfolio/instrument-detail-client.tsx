@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSettings } from "@/components/settings/settings-provider";
-import { Pencil } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import {
   CandlestickChart,
   type OhlcData,
@@ -19,7 +19,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MarkdownNotesEditor } from "@/components/ui/markdown-notes-editor";
 import { MarkdownPreview } from "@/components/ui/markdown-preview";
+import { useNotesDrawer } from "@/components/notes/notes-drawer-context";
 import { clearClientCache, PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
+import { toLocalDateKey } from "@/lib/date-keys";
 import { convertFromTwd } from "@/lib/fx-convert";
 import type { InstrumentPnlSummary } from "@/lib/instrument-pnl";
 import type { QuoteResult } from "@/lib/yahoo";
@@ -54,6 +56,14 @@ type Instrument = {
   tags: string[];
 };
 
+type RelatedNote = {
+  id: string;
+  title: string;
+  kind: string;
+  noteDate: string;
+  tags: string[];
+};
+
 export function InstrumentDetailClient({
   instrument,
   quote,
@@ -68,6 +78,7 @@ export function InstrumentDetailClient({
   accounts,
   pnlSummary,
   chartType = "candlestick",
+  relatedNotes,
 }: {
   instrument: Instrument;
   quote: QuoteResult | null;
@@ -83,7 +94,9 @@ export function InstrumentDetailClient({
   accounts: { id: string; name: string; currency: string }[];
   pnlSummary: InstrumentPnlSummary;
   chartType?: "candlestick" | "line";
+  relatedNotes: RelatedNote[];
 }) {
+  const { open: openNote } = useNotesDrawer();
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("from");
@@ -93,6 +106,90 @@ export function InstrumentDetailClient({
   const [twdToBase, setTwdToBase] = useState<number | null>(1);
   const [displayName, setDisplayName] = useState(instrument.name ?? "");
   const [notes, setNotes] = useState(instrument.notes ?? "");
+
+  // ── 快速新增交易：直接在標的頁記錄，不必跑去 Transactions 頁再回來 ──
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddAccountId, setQuickAddAccountId] = useState(
+    accounts[0]?.id ?? "",
+  );
+  const [quickAddType, setQuickAddType] = useState<"BUY" | "SELL" | "DIVIDEND">(
+    "BUY",
+  );
+  const [quickAddDate, setQuickAddDate] = useState(() => toLocalDateKey(new Date()));
+  const [quickAddQuantity, setQuickAddQuantity] = useState("");
+  const [quickAddPrice, setQuickAddPrice] = useState("");
+  const [quickAddFee, setQuickAddFee] = useState("0");
+  const [quickAddTax, setQuickAddTax] = useState("0");
+  const [quickAddNote, setQuickAddNote] = useState("");
+  const [quickAddSubmitting, setQuickAddSubmitting] = useState(false);
+  const quickAddQuantityRef = useRef<HTMLInputElement>(null);
+
+  const quickAddHeldQty = (() => {
+    let qty = 0;
+    for (const t of transactionHistory) {
+      if (t.accountId !== quickAddAccountId) continue;
+      if (t.type === "BUY") qty += t.quantity;
+      else if (t.type === "SELL") qty -= t.quantity;
+    }
+    return qty;
+  })();
+
+  const quickAddSellWarning = (() => {
+    if (quickAddType !== "SELL") return null;
+    const qty = parseFloat(quickAddQuantity);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+    if (qty <= quickAddHeldQty + 1e-7) return null;
+    const overBy = qty - quickAddHeldQty;
+    return `目前持有 ${quickAddHeldQty.toLocaleString("zh-TW")} 股，這筆賣出 ${qty.toLocaleString("zh-TW")} 股將超賣 ${overBy.toLocaleString("zh-TW")} 股`;
+  })();
+
+  async function submitQuickAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (quickAddSubmitting) return;
+    if (
+      quickAddSellWarning &&
+      !window.confirm(`${quickAddSellWarning}\n\n確定要繼續新增這筆交易嗎？`)
+    ) {
+      return;
+    }
+    setQuickAddSubmitting(true);
+    try {
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: quickAddAccountId || undefined,
+          symbol: instrument.symbol,
+          type: quickAddType,
+          date: quickAddDate,
+          quantity: parseFloat(quickAddQuantity),
+          price: parseFloat(quickAddPrice),
+          fee: parseFloat(quickAddFee) || 0,
+          tax: parseFloat(quickAddTax) || 0,
+          note: quickAddNote || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error ?? "新增失敗");
+        return;
+      }
+      const created = (await res.json()) as { warning?: string | null };
+      if (created.warning) alert(created.warning);
+      setQuickAddQuantity("");
+      setQuickAddPrice("");
+      setQuickAddFee("0");
+      setQuickAddTax("0");
+      setQuickAddNote("");
+      clearClientCache(PAGE_CACHE_KEYS.dashboard);
+      clearClientCache(PAGE_CACHE_KEYS.holdings);
+      clearClientCache(PAGE_CACHE_KEYS.transactions);
+      router.refresh();
+      quickAddQuantityRef.current?.focus();
+    } finally {
+      setQuickAddSubmitting(false);
+    }
+  }
 
   // Client-side OHLC fallback: when the server render got no data (Yahoo
   // timed out), try fetching the chart data directly from the browser.
@@ -267,7 +364,7 @@ export function InstrumentDetailClient({
         <button
           type="button"
           onClick={goBack}
-          className="text-xs text-[var(--color-muted)] hover:text-[var(--color-primary)]"
+          className="-mx-2 -my-1 rounded-md px-2 py-1 text-sm font-medium text-[var(--color-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-primary)]"
         >
           ← 返回
         </button>
@@ -557,10 +654,139 @@ export function InstrumentDetailClient({
 
       <PageSection id="instrument-transactions" title="交易記錄" className="mt-8" navOrder={40}>
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
             <CardTitle>交易記錄</CardTitle>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 px-2.5 text-xs"
+              onClick={() => setQuickAddOpen((v) => !v)}
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              新增交易
+            </Button>
           </CardHeader>
           <CardContent className="space-y-6">
+            {quickAddOpen && (
+              <form
+                onSubmit={submitQuickAdd}
+                className="space-y-3 rounded-lg border border-[var(--color-card-border)]/60 bg-[var(--color-card-border)]/10 p-4"
+              >
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <label className="form-label mb-1 block text-xs">帳戶</label>
+                    <select
+                      value={quickAddAccountId}
+                      onChange={(e) => setQuickAddAccountId(e.target.value)}
+                      className="h-9 w-full rounded-md border border-[var(--color-card-border)] bg-[var(--color-background)] px-2 text-sm"
+                      required
+                    >
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}（{a.currency}）
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">類型</label>
+                    <select
+                      value={quickAddType}
+                      onChange={(e) =>
+                        setQuickAddType(e.target.value as "BUY" | "SELL" | "DIVIDEND")
+                      }
+                      className="h-9 w-full rounded-md border border-[var(--color-card-border)] bg-[var(--color-background)] px-2 text-sm"
+                    >
+                      <option value="BUY">買入 BUY</option>
+                      <option value="SELL">賣出 SELL</option>
+                      <option value="DIVIDEND">股息 DIVIDEND</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">日期</label>
+                    <Input
+                      type="date"
+                      className="h-9"
+                      value={quickAddDate}
+                      onChange={(e) => setQuickAddDate(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">數量</label>
+                    <Input
+                      ref={quickAddQuantityRef}
+                      type="number"
+                      step="any"
+                      className="h-9"
+                      value={quickAddQuantity}
+                      onChange={(e) => setQuickAddQuantity(e.target.value)}
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">單價</label>
+                    <Input
+                      type="number"
+                      step="any"
+                      className="h-9"
+                      value={quickAddPrice}
+                      onChange={(e) => setQuickAddPrice(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">手續費</label>
+                    <Input
+                      type="number"
+                      step="any"
+                      className="h-9"
+                      value={quickAddFee}
+                      onChange={(e) => setQuickAddFee(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">稅</label>
+                    <Input
+                      type="number"
+                      step="any"
+                      className="h-9"
+                      value={quickAddTax}
+                      onChange={(e) => setQuickAddTax(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label mb-1 block text-xs">備註</label>
+                    <Input
+                      className="h-9"
+                      placeholder="選填"
+                      value={quickAddNote}
+                      onChange={(e) => setQuickAddNote(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {quickAddSellWarning && (
+                  <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200/90">
+                    ⚠ {quickAddSellWarning}
+                  </p>
+                )}
+
+                <div className="flex items-center gap-3">
+                  <Button type="submit" disabled={quickAddSubmitting} className="h-9">
+                    {quickAddSubmitting ? "新增中…" : "確認新增"}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-xs text-[var(--color-muted)] hover:text-[var(--color-primary)]"
+                    onClick={() => setQuickAddOpen(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </form>
+            )}
             <TransactionsTable
               columnOrder={INSTRUMENT_TX_COLUMN_ORDER}
               onColumnOrderChange={() => {}}
@@ -633,6 +859,35 @@ export function InstrumentDetailClient({
                 )}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      </PageSection>
+
+      <PageSection id="instrument-related-notes" title="相關筆記" className="mt-8" navOrder={45}>
+        <Card>
+          <CardHeader>
+            <CardTitle>相關筆記</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {relatedNotes.length === 0 ? (
+              <p className="text-sm text-[var(--color-muted)]">尚無相關筆記</p>
+            ) : (
+              relatedNotes.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => openNote(n.id)}
+                  className="block w-full rounded-md border border-[var(--color-card-border)]/60 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--color-card-border)]/20"
+                >
+                  <span className="font-medium text-[var(--color-foreground)]">
+                    {n.title}
+                  </span>
+                  <span className="ml-2 text-xs text-[var(--color-muted)]">
+                    {n.kind} · {n.noteDate}
+                  </span>
+                </button>
+              ))
+            )}
           </CardContent>
         </Card>
       </PageSection>

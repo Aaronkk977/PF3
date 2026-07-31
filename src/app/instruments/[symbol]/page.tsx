@@ -91,7 +91,7 @@ export default async function InstrumentPage({
   });
   const allTags = await prisma.tag.findMany({ orderBy: { name: "asc" } });
 
-  const [txRows, accounts] = await Promise.all([
+  const [txRows, accounts, noteLinks] = await Promise.all([
     prisma.transaction.findMany({
       where: { instrumentId: instrument.id },
       include: { account: true },
@@ -101,7 +101,20 @@ export default async function InstrumentPage({
       select: { id: true, name: true, currency: true },
       orderBy: { name: "asc" },
     }),
+    prisma.noteOnInstrument.findMany({
+      where: { instrumentId: instrument.id },
+      include: { note: { include: { tags: { include: { tag: true } } } } },
+      orderBy: { note: { noteDate: "desc" } },
+    }),
   ]);
+
+  const relatedNotes = noteLinks.map((link) => ({
+    id: link.note.id,
+    title: link.note.title,
+    kind: link.note.kind,
+    noteDate: toTransactionDateKey(link.note.noteDate),
+    tags: link.note.tags.map((t) => t.tag.name),
+  }));
 
   const transactionHistory = txRows.map((t) => ({
     id: t.id,
@@ -181,6 +194,7 @@ export default async function InstrumentPage({
       accounts={accounts}
       pnlSummary={pnlSummary}
       chartType={isVix ? "line" : "candlestick"}
+      relatedNotes={relatedNotes}
     />
     </Suspense>
   );
