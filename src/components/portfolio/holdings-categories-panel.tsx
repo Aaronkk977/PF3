@@ -16,6 +16,8 @@ import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { cn } from "@/lib/utils";
 import type { HoldingPosition } from "@/lib/holding-types";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 
 export type CategoryRow = {
   id: string;
@@ -111,7 +113,9 @@ function NewCategoryModal({
       return;
     }
     const t = setTimeout(() => {
-      void fetch(`/api/instruments/search?q=${encodeURIComponent(raw)}`)
+      void fetch(`/api/instruments/search?q=${encodeURIComponent(raw)}`, {
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.holdings),
+      })
         .then((r) => (r.ok ? r.json() : []))
         .then((j: SearchSymbolSuggestion[]) => {
           setSuggestions(
@@ -320,7 +324,9 @@ export function HoldingsCategoriesPanel({
   }, [onCategoriesChange]);
 
   const loadWatchlists = useCallback(async () => {
-    const res = await fetch("/api/watchlist");
+    const res = await fetch("/api/watchlist", {
+      headers: pageRequestHeaders(PAGE_CACHE_KEYS.holdings),
+    });
     if (!res.ok) return;
     const json = (await res.json()) as { lists: WatchlistWithEntries[] };
     setWatchlists(json.lists);
@@ -344,7 +350,9 @@ export function HoldingsCategoriesPanel({
       return;
     }
     const t = setTimeout(() => {
-      void fetch(`/api/instruments/search?q=${encodeURIComponent(raw)}`)
+      void fetch(`/api/instruments/search?q=${encodeURIComponent(raw)}`, {
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.holdings),
+      })
         .then((r) => (r.ok ? r.json() : []))
         .then((j: SearchSymbolSuggestion[]) => {
           setAddSuggestions(

@@ -21,6 +21,8 @@ import {
   formatFeeTaxAmount,
   formatTransactionAmount,
 } from "@/lib/utils";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 
 const CASH_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
 
@@ -169,7 +171,9 @@ export function TransactionRow({
         price: form.price,
         roundHalfUp: nextAccount?.feeTaxRoundHalfUp ? "1" : "0",
       });
-      const res = await fetch(`/api/transactions/preview?${params}`);
+      const res = await fetch(`/api/transactions/preview?${params}`, {
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.transactions),
+      });
       if (!res.ok) return;
       const data = (await res.json()) as { fee: number; tax: number };
       setForm((f) =>

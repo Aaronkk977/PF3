@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withRequestScope } from "@/lib/request-priority";
 import { prisma } from "@/lib/db";
 import { resolveInstrumentDisplayName } from "@/lib/instrument-display-name";
 import { inferAssetClass, validateSymbol } from "@/lib/yahoo";
 
 export async function GET(request: NextRequest) {
+  return withRequestScope(request, () => listInstruments(request));
+}
+
+async function listInstruments(request: NextRequest) {
   const q = request.nextUrl.searchParams.get("q");
 
   if (q) {

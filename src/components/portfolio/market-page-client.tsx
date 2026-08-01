@@ -12,6 +12,7 @@ import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import {
   prefetchPerformanceWarm,
   prefetchSiblingPages,
+  prefetchValueHistoryWarm,
 } from "@/lib/prefetch-page-data";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
 
@@ -36,6 +37,7 @@ export function MarketPageClient() {
     if (data) {
       prefetchSiblingPages();
       prefetchPerformanceWarm();
+      prefetchValueHistoryWarm();
     }
   }, [data]);
 

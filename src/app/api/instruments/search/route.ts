@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withRequestScope } from "@/lib/request-priority";
 import { prisma } from "@/lib/db";
 import { pickDisplayName } from "@/lib/instrument-display-name";
 import { resolveSuggestionDisplayName } from "@/lib/instrument-suggestions";
@@ -6,6 +7,10 @@ import { normalizeSymbolInput, searchInstruments } from "@/lib/instrument-search
 import { getQuote } from "@/lib/yahoo";
 
 export async function GET(request: NextRequest) {
+  return withRequestScope(request, () => searchInstrumentsRoute(request));
+}
+
+async function searchInstrumentsRoute(request: NextRequest) {
   const q = request.nextUrl.searchParams.get("q") ?? "";
 
   if (!q.trim()) {

@@ -8,6 +8,8 @@ import {
   ValueTrendChart,
   type ValueTrendLineConfig,
 } from "@/components/charts/value-trend-chart";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 import { AllocationSettings } from "@/components/portfolio/allocation-settings";
 import { CompactHoldingsFilters } from "@/components/portfolio/compact-holdings-filters";
 import { HoldingCategoryCell } from "@/components/portfolio/holding-category-cell";
@@ -23,7 +25,6 @@ import {
   isUserCategoryKey,
   userCategoryKeys,
 } from "@/lib/allocation-chart-data";
-import { ENTIRE_PORTFOLIO_FILTER_ID } from "@/lib/chart-constants";
 import { PageSection } from "@/components/layout/page-sections";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSettings } from "@/components/settings/settings-provider";
@@ -31,8 +32,10 @@ import type { HoldingPosition } from "@/lib/holding-types";
 import { convertFromTwd } from "@/lib/fx-convert";
 import {
   buildHoldingsValueCacheKey,
+  buildValueHistoryUrl,
   isHoldingsValueCacheFresh,
   loadHoldingsValueCache,
+  resolveValueHistoryQuery,
   saveHoldingsValueCache,
   type ValueTrendLine,
 } from "@/lib/holdings-cache-client";
@@ -167,6 +170,7 @@ export function HoldingsClient({
   allTags,
   totalCashBase,
   cashByAccount,
+  dataVersion = "",
   onRefresh,
 }: {
   holdings: HoldingPosition[];
@@ -174,6 +178,8 @@ export function HoldingsClient({
   allTags: string[];
   totalCashBase: number;
   cashByAccount: Record<string, number>;
+  /** 交易資料指紋；一變動，下面的市值走勢快取鍵就跟著變，舊快取自動失效 */
+  dataVersion?: string;
   onRefresh?: () => void;
 }) {
   const pathname = usePathname();
@@ -449,28 +455,20 @@ export function HoldingsClient({
     [trendLines],
   );
 
-  const trendSelection = useMemo(() => {
-    const wantsEntire = trendAccountFilters.includes(ENTIRE_PORTFOLIO_FILTER_ID);
-    const accountIds = trendAccountFilters.filter(
-      (id) => id !== ENTIRE_PORTFOLIO_FILTER_ID,
-    );
-    return { wantsEntire, accountIds };
-  }, [trendAccountFilters]);
-
-  const valueHistoryAccountIds = useMemo(() => {
-    if (trendSelection.accountIds.length > 0) {
-      return trendSelection.accountIds.join(",");
-    }
-    return "all";
-  }, [trendSelection.accountIds]);
+  // 與背景預熱共用同一支換算（見 holdings-cache-client.ts 的註解）
+  const valueHistoryQuery = useMemo(
+    () => resolveValueHistoryQuery(trendAccountFilters, trendStartDate),
+    [trendAccountFilters, trendStartDate],
+  );
 
   const loadValueHistory = useCallback(
     async (force = false) => {
       const cacheKey = buildHoldingsValueCacheKey(
-        valueHistoryAccountIds,
-        trendStartDate,
-        trendSelection.wantsEntire,
+        valueHistoryQuery.accountIds,
+        valueHistoryQuery.start,
+        valueHistoryQuery.showEntire,
         true,
+        dataVersion,
       );
 
       const localCached = loadHoldingsValueCache(cacheKey);
@@ -488,11 +486,9 @@ export function HoldingsClient({
 
       setValueHistoryLoading(true);
       try {
-        const forceParam = force ? "&force=1" : "";
-        const entireParam = trendSelection.wantsEntire ? "&entire=1" : "";
-        const flowsParam = "&includeCashFlows=1";
         const res = await fetch(
-          `/api/portfolio/value-history?start=${encodeURIComponent(trendStartDate)}&accountIds=${encodeURIComponent(valueHistoryAccountIds)}${entireParam}${flowsParam}${forceParam}`,
+          buildValueHistoryUrl(valueHistoryQuery, { force }),
+          { headers: pageRequestHeaders(PAGE_CACHE_KEYS.holdings) },
         );
         if (res.ok) {
           const json = await parseResponseJson<{
@@ -523,7 +519,7 @@ export function HoldingsClient({
         setValueHistoryLoading(false);
       }
     },
-    [valueHistoryAccountIds, trendStartDate, trendSelection.wantsEntire],
+    [valueHistoryQuery, dataVersion],
   );
 
   useEffect(() => {

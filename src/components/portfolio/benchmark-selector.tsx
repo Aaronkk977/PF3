@@ -7,6 +7,8 @@ import { SymbolSearchInput } from "@/components/portfolio/symbol-search-input";
 import { BENCHMARK_COLORS } from "@/lib/chart-constants";
 import type { BenchmarkRecord } from "@/lib/benchmarks";
 import { cn, parseResponseJson } from "@/lib/utils";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 
 function toggleInList<T>(list: T[], item: T): T[] {
   return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
@@ -41,7 +43,9 @@ export function BenchmarkSelector({
       return;
     }
     searchTimer.current = setTimeout(() => {
-      void fetch(`/api/instruments/search?q=${encodeURIComponent(q)}`)
+      void fetch(`/api/instruments/search?q=${encodeURIComponent(q)}`, {
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.performance),
+      })
         .then((r) => parseResponseJson<{ symbol: string; name: string }[]>(r))
         .then((list) => setSuggestions(list ?? []))
         .catch(() => setSuggestions([]));

@@ -9,6 +9,7 @@ import { PageSection } from "@/components/layout/page-sections";
 import { PerformanceMetricPanels } from "@/components/portfolio/performance-metric-panels";
 import { BenchmarkSelector } from "@/components/portfolio/benchmark-selector";
 import { PerformancePeriodPresets } from "@/components/portfolio/performance-period-presets";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 import type { BenchmarkRecord } from "@/lib/benchmarks";
 import type { DrawdownPoint } from "@/lib/metrics";
 import type { BenchmarkComparison } from "@/lib/performance";
@@ -405,7 +406,9 @@ export function PerformanceClient({
         });
         if (force) params.set("force", "1");
 
-        const res = await fetch(`/api/performance?${params}`);
+        const res = await fetch(`/api/performance?${params}`, {
+          headers: pageRequestHeaders("performance"),
+        });
         if (!res.ok || !res.body) {
           throw new Error("績效計算失敗");
         }

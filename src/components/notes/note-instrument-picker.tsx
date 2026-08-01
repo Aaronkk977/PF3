@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 
 export type PickableInstrument = { id: string; symbol: string; name: string | null };
 
@@ -23,7 +25,9 @@ export function NoteInstrumentPicker({
   const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
-    void fetch("/api/instruments")
+    void fetch("/api/instruments", {
+      headers: pageRequestHeaders(PAGE_CACHE_KEYS.notes),
+    })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: { id: string; symbol: string; name: string | null }[]) => {
         setAll(rows.map((r) => ({ id: r.id, symbol: r.symbol, name: r.name })));

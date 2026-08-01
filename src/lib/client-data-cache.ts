@@ -48,12 +48,17 @@ export function patchClientCache<T extends object>(
   writeClientCache(key, next);
 }
 
+/** 前四個同時是 sessionStorage 的快取鍵；`performance` 與 `instrument` 沒有
+ *  client 端快取，只當作「這個請求屬於哪一頁」的識別用（見
+ *  page-request-headers.ts）——頁面識別集中在這裡一份，避免各處散落字串。 */
 export const PAGE_CACHE_KEYS = {
   dashboard: "dashboard",
   holdings: "holdings",
   transactions: "transactions",
   trades: "trades",
   notes: "notes",
+  performance: "performance",
+  instrument: "instrument",
 } as const;
 
 /** Remove a single cache entry from both in-memory map and sessionStorage. */

@@ -85,6 +85,10 @@ export async function buildHoldingsValueTrend(
     accountIds?: string[];
     showEntirePortfolioLine: boolean;
     includeCashFlows: boolean;
+    /** 略過 PortfolioValueSnapshot 快取，整段重算（持股頁的「重新整理」按鈕）。
+     *  以前這個參數沒有從路由接進來，按鈕等於空按——快取一旦存進錯的數字，
+     *  使用者沒有任何辦法把它清掉。 */
+    force?: boolean;
   },
 ): Promise<HoldingsValueTrendResult> {
   const allAccounts = await prisma.account.findMany({ orderBy: { name: "asc" } });
@@ -100,6 +104,7 @@ export async function buildHoldingsValueTrend(
     const acc = scopeAccounts[i]!;
     const { points } = await resolvePortfolioValueSeries(periodStart, periodEnd, {
       accountIds: [acc.id],
+      force: options.force,
     });
     if (points.length === 0) continue;
     lines.push({
@@ -119,6 +124,7 @@ export async function buildHoldingsValueTrend(
     const { points: entirePoints, cashFlows: entireFlows } =
       await resolvePortfolioValueSeries(periodStart, periodEnd, {
         accountIds: scopeIds,
+        force: options.force,
       });
     if (entirePoints.length > 0) {
       lines.push({
@@ -133,6 +139,7 @@ export async function buildHoldingsValueTrend(
   } else if (options.includeCashFlows && scopeIds.length > 0) {
     ({ cashFlows } = await resolvePortfolioValueSeries(periodStart, periodEnd, {
       accountIds: scopeIds,
+      force: options.force,
     }));
   }
 

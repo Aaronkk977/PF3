@@ -13,6 +13,7 @@ import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import {
   prefetchPerformanceWarm,
   prefetchSiblingPages,
+  prefetchValueHistoryWarm,
 } from "@/lib/prefetch-page-data";
 import {
   changePositive,
@@ -39,6 +40,7 @@ export function OverviewPageClient() {
     if (data) {
       prefetchSiblingPages();
       prefetchPerformanceWarm();
+      prefetchValueHistoryWarm();
     }
   }, [data]);
 

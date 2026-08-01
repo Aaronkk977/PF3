@@ -8,8 +8,13 @@ import {
   withoutDeprecatedTags,
 } from "@/lib/deprecated-tags";
 import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
+import { withRequestScope } from "@/lib/request-priority";
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withRequestScope(request, loadHoldingsPage);
+}
+
+async function loadHoldingsPage() {
   try {
     ensureStartupMaintenanceStarted();
 
@@ -18,12 +23,18 @@ export async function GET() {
     });
 
     const holdings = await getHoldings();
-    const [accounts, tags, summary, cashMap] = await Promise.all([
-      prisma.account.findMany({ orderBy: { name: "asc" } }),
-      prisma.tag.findMany({ orderBy: { name: "asc" } }),
-      getPortfolioSummary(holdings),
-      computeAllAccountsCash(),
-    ]);
+    const [accounts, tags, summary, cashMap, txCount, latestTx] =
+      await Promise.all([
+        prisma.account.findMany({ orderBy: { name: "asc" } }),
+        prisma.tag.findMany({ orderBy: { name: "asc" } }),
+        getPortfolioSummary(holdings),
+        computeAllAccountsCash(),
+        prisma.transaction.count(),
+        prisma.transaction.findFirst({
+          orderBy: { updatedAt: "desc" },
+          select: { updatedAt: true },
+        }),
+      ]);
 
     const cashByAccount: Record<string, number> = {};
     for (const acc of accounts) {
@@ -41,6 +52,11 @@ export async function GET() {
       allTags: withoutDeprecatedTags(tags.map((t) => t.name)),
       totalCashBase: summary.cash,
       cashByAccount,
+      // 交易資料的指紋：筆數 + 最後一次寫入時間。市值走勢的 client 端快取把它
+      // 放進快取鍵，任何交易異動（新增／編輯／刪除／匯入／分割改寫）都會自動
+      // 讓舊快取查不到，不必在每個異動點記得手動清——實測交易頁新增交易時
+      // 就完全沒有清這份快取，走勢圖會停在異動前的數字直到隔天。
+      dataVersion: `${txCount}:${latestTx?.updatedAt.getTime() ?? 0}`,
     });
   } catch (e) {
     console.error(e);

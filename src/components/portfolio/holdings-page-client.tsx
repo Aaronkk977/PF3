@@ -13,6 +13,8 @@ type HoldingsPayload = {
   allTags: string[];
   totalCashBase: number;
   cashByAccount: Record<string, number>;
+  /** 交易資料指紋，市值走勢快取用來自動失效 */
+  dataVersion?: string;
 };
 
 export function HoldingsPageClient() {
@@ -47,6 +49,7 @@ export function HoldingsPageClient() {
         allTags={data.allTags}
         totalCashBase={data.totalCashBase}
         cashByAccount={data.cashByAccount}
+        dataVersion={data.dataVersion ?? ""}
         onRefresh={() => void refresh()}
       />
     </>

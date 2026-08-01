@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHistoricalPrices } from "@/lib/yahoo";
+import { withRequestScope } from "@/lib/request-priority";
 import { decodeSymbol } from "@/lib/utils";
 
 export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ symbol: string }> },
+) {
+  return withRequestScope(request, () => loadChart(request, context));
+}
+
+async function loadChart(
   request: NextRequest,
   { params }: { params: Promise<{ symbol: string }> },
 ) {

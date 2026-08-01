@@ -18,6 +18,8 @@ import {
   type ISeriesApi,
   type Time,
 } from "lightweight-charts";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
+import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 
 export type OhlcData = {
   date: string;
@@ -149,6 +151,7 @@ export function CandlestickChart({
 
       const res = await fetch(
         `/api/charts/${encodeURIComponent(symbol)}?start=${startStr}&end=${endStr}`,
+        { headers: pageRequestHeaders(PAGE_CACHE_KEYS.instrument) },
       );
       if (!res.ok) return;
       const older = (await res.json()) as OhlcData[];

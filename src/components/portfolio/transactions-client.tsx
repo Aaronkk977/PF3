@@ -50,6 +50,7 @@ import {
   saveTransactionsPrefs,
   type RecentInstrument,
 } from "@/lib/ui-prefs";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 
 function offsetLocalDateKey(days: number): string {
   const d = new Date();
@@ -178,7 +179,9 @@ export function TransactionsClient({
 
   const refreshInstrumentCatalog = useCallback(async (): Promise<Instrument[]> => {
     try {
-      const res = await fetch("/api/instruments");
+      const res = await fetch("/api/instruments", {
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.transactions),
+      });
       if (!res.ok) return [];
       const list = (await res.json()) as {
         id: string;
@@ -515,7 +518,10 @@ export function TransactionsClient({
 
         const res = await fetch(
           `/api/instruments/search?q=${encodeURIComponent(q)}`,
-          { signal: controller.signal },
+          {
+            signal: controller.signal,
+            headers: pageRequestHeaders(PAGE_CACHE_KEYS.transactions),
+          },
         );
         if (!res.ok) return;
         const remote: { symbol: string; name: string }[] = await res.json();
@@ -607,6 +613,7 @@ export function TransactionsClient({
 
       const res = await fetch(`/api/transactions/preview?${params}`, {
         signal: controller.signal,
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.transactions),
       });
       if (!res.ok) return;
       const data = (await res.json()) as {
@@ -657,6 +664,7 @@ export function TransactionsClient({
 
       const res = await fetch(`/api/transactions/preview?${params}`, {
         signal: controller.signal,
+        headers: pageRequestHeaders(PAGE_CACHE_KEYS.transactions),
       });
       if (!res.ok) return;
       const data = (await res.json()) as { fee: number; tax: number };

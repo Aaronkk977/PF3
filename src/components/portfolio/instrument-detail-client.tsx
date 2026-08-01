@@ -34,6 +34,7 @@ import {
 } from "@/lib/utils";
 
 import type { TxColumnId } from "@/lib/transaction-table-columns";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 
 const INSTRUMENT_TX_COLUMN_ORDER: TxColumnId[] = [
   "date",
@@ -200,7 +201,9 @@ export function InstrumentDetailClient({
   useEffect(() => {
     if (ohlc.length > 0) return; // already have data
     setChartLoading(true);
-    fetch(`/api/charts/${encodeURIComponent(instrument.symbol)}`)
+    fetch(`/api/charts/${encodeURIComponent(instrument.symbol)}`, {
+      headers: pageRequestHeaders(PAGE_CACHE_KEYS.instrument),
+    })
       .then(async (r) => {
         if (!r.ok) return;
         const bars = (await r.json()) as OhlcData[];

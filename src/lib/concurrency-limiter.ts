@@ -1,14 +1,19 @@
+import { inferRequestPriority } from "@/lib/request-priority";
+
 /** 限制「同時執行中」的工作數量，且這個上限是全域共用的——同一個 semaphore
  *  實例不管被幾個不相關的呼叫者（不同請求、不同函式）拿去用，加總起來的併發
  *  執行數都不會超過 limit。用來取代各檔案各自土炮的併發批次迴圈：批次內的
  *  上限只在單次呼叫裡有效，兩個批次剛好同時發生時加總還是可能超標；
  *  semaphore 是全域的，才能真的擋住這種跨呼叫疊加的情況。
  *
- *  支援兩層優先權（見 run() 的 priority 選項）：使用者切頁時，我們刻意不去
- *  abort 舊頁面還沒做完的工作（怕留下不上不下的狀態，且切頁很快、犧牲的
- *  運算量通常不大），而是讓新頁面的工作插隊排到還沒開始跑的舊工作前面。
- *  已經真的拿到名額、在執行中的工作不會被插隊打斷——這裡做的是「排隊順序」
- *  的優先權，不是搶佔式排程。 */
+ *  支援兩層優先權：使用者切頁時，我們刻意不去 abort 舊頁面還沒做完的工作
+ *  （怕留下不上不下的狀態，且切頁很快、犧牲的運算量通常不大），而是讓新頁面
+ *  的工作插隊排到還沒開始跑的舊工作前面。已經真的拿到名額、在執行中的工作
+ *  不會被插隊打斷——這裡做的是「排隊順序」的優先權，不是搶佔式排程。
+ *
+ *  優先權怎麼決定：呼叫端有明確傳 priority 就用它（開機維護一律傳 "low"）；
+ *  沒傳的話由 request-priority 依「這個請求來自哪一頁、使用者現在在看哪一頁」
+ *  推斷，見 inferRequestPriority()。 */
 export type RunPriority = "high" | "low";
 
 export type Semaphore = {
@@ -49,7 +54,9 @@ export function createSemaphore(limit: number): Semaphore {
       fn: () => Promise<T>,
       options?: { priority?: RunPriority },
     ): Promise<T> {
-      await acquire(options?.priority ?? "high");
+      // 沒明講就看請求來源：背景預熱、或已經被切走的舊頁面，一律排到後面。
+      // 呼叫端明確指定的（例如開機維護的 "low"）永遠優先採用。
+      await acquire(options?.priority ?? inferRequestPriority());
       try {
         return await fn();
       } finally {

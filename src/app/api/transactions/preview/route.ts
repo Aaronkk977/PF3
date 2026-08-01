@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withRequestScope } from "@/lib/request-priority";
 import { calculateFeeTax } from "@/lib/fee-tax";
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { prisma } from "@/lib/db";
@@ -6,6 +7,10 @@ import { findCloseOnOrBefore } from "@/lib/price-on-date";
 import { getHistoricalPrices, validateSymbol } from "@/lib/yahoo";
 
 export async function GET(request: NextRequest) {
+  return withRequestScope(request, () => previewTransaction(request));
+}
+
+async function previewTransaction(request: NextRequest) {
   const p = request.nextUrl.searchParams;
   const rawSymbol = p.get("symbol")?.trim() ?? "";
   const dateStr = p.get("date")?.slice(0, 10);

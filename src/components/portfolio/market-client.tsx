@@ -33,9 +33,12 @@ import {
   PAGE_CACHE_KEYS,
   patchClientCache,
 } from "@/lib/client-data-cache";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 
 async function fetchWatchlists(): Promise<WatchlistWithEntries[]> {
-  const res = await fetch("/api/watchlist");
+  const res = await fetch("/api/watchlist", {
+    headers: pageRequestHeaders(PAGE_CACHE_KEYS.dashboard),
+  });
   const json = (await res.json()) as { lists: WatchlistWithEntries[] };
   return json.lists ?? [];
 }
@@ -112,6 +115,7 @@ export function MarketClient({
 
       const res = await fetch(
         `/api/instruments/search?q=${encodeURIComponent(q)}`,
+        { headers: pageRequestHeaders(PAGE_CACHE_KEYS.dashboard) },
       );
       const remote: { symbol: string; name: string }[] = res.ok
         ? await res.json()

@@ -4,9 +4,14 @@ import { buildPriorityInstrumentSuggestions } from "@/lib/instrument-suggestions
 import { toTransactionDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
+import { withRequestScope } from "@/lib/request-priority";
 import { toNumber } from "@/lib/utils";
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withRequestScope(request, loadTransactionsPage);
+}
+
+async function loadTransactionsPage() {
   try {
     ensureStartupMaintenanceStarted();
 

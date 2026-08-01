@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withRequestScope } from "@/lib/request-priority";
 import {
   addToWatchlist,
   addWatchlistSeparator,
@@ -16,7 +17,11 @@ import {
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { canAddSymbolToWatchlist } from "@/lib/yahoo";
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withRequestScope(request, loadWatchlists);
+}
+
+async function loadWatchlists() {
   const lists = await getWatchlists();
   return NextResponse.json({ lists });
 }

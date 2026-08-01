@@ -6,6 +6,7 @@ import {
   getCachedPerformance,
   setCachedPerformance,
 } from "@/lib/performance-cache";
+import { withRequestScope } from "@/lib/request-priority";
 
 function parseRequest(request: NextRequest) {
   const params = request.nextUrl.searchParams;
@@ -44,7 +45,11 @@ function parseRequest(request: NextRequest) {
 
   const startStr = periodStart.toISOString().slice(0, 10);
   const endStr = periodEnd.toISOString().slice(0, 10);
-  const accountsKey = accountIds.length > 0 ? accountIds.join(",") : "all";
+  // "all" 前面加個沒人會傳的前綴，避免使用者真的傳了 ?accounts=all（或剛好
+  // 湊出跟這個 sentinel 一樣的字串）時，跟「沒篩選帳戶＝全部帳戶」的快取
+  // 撞在同一個 cacheKey，把真正的全帳戶結果污染成這個假 id 的（通常是空）結果。
+  const accountsKey =
+    accountIds.length > 0 ? `sel:${accountIds.join(",")}` : "all";
   const benchesKey = benchmarkSymbols.join(",") || "none";
   const cacheKey = buildPerformanceCacheKey(
     startStr,
@@ -68,6 +73,10 @@ function parseRequest(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  return withRequestScope(request, () => runPerformanceRequest(request));
+}
+
+async function runPerformanceRequest(request: NextRequest) {
   const {
     force,
     stream,

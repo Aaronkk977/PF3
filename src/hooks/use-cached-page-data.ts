@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readClientCache, writeClientCache } from "@/lib/client-data-cache";
+import { pageRequestHeaders } from "@/lib/page-request-headers";
 import { parseResponseJson } from "@/lib/utils";
 
 export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
@@ -18,7 +19,12 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
       setRefreshing(true);
       setError(null);
       try {
-        const res = await fetch(fetchUrl, { cache: "no-store" });
+        // 帶上來源頁：這是使用者正在看的頁，後端據此把「已經被切走的舊頁面」
+        // 的排隊工作降級，讓這一頁先拿到名額（見 lib/request-priority.ts）。
+        const res = await fetch(fetchUrl, {
+          cache: "no-store",
+          headers: pageRequestHeaders(cacheKey),
+        });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(

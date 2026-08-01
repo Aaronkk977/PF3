@@ -3,9 +3,14 @@ import { buildPriorityInstrumentSuggestions } from "@/lib/instrument-suggestions
 import { getHoldings, getPortfolioSummary } from "@/lib/portfolio-engine";
 import { prisma } from "@/lib/db";
 import { ensureStartupMaintenanceStarted } from "@/lib/startup-maintenance";
+import { withRequestScope } from "@/lib/request-priority";
 import { getWatchlists } from "@/lib/watchlist";
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withRequestScope(request, loadDashboard);
+}
+
+async function loadDashboard() {
   try {
     // 保險：正常情況下開機維護由 /api/startup/status 在啟動畫面階段就跑完，
     // 這裡只是防呆——萬一那條路徑沒被觸發（例如直接用 next dev 開發），

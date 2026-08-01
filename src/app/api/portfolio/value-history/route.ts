@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildHoldingsValueTrend } from "@/lib/holdings-value-trend";
+import { withRequestScope } from "@/lib/request-priority";
 
 export async function GET(request: NextRequest) {
+  return withRequestScope(request, () => loadValueHistory(request));
+}
+
+async function loadValueHistory(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const startParam = params.get("start");
   const months = Number(params.get("months") ?? "12");
   const accountIdsParam = params.get("accountIds") ?? "all";
   const showEntire = params.get("entire") === "1";
   const includeCashFlows = params.get("includeCashFlows") !== "0";
+  const force = params.get("force") === "1";
 
   const periodEnd = new Date();
   let periodStart: Date;
@@ -43,6 +49,7 @@ export async function GET(request: NextRequest) {
       accountIds,
       showEntirePortfolioLine: showEntire,
       includeCashFlows,
+      force,
     });
     return NextResponse.json({
       ...result,
