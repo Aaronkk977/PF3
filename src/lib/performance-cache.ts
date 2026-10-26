@@ -1,42 +1,10 @@
-import { createHash } from "crypto";
+import { getDataFingerprint } from "@/lib/data-version";
 import { prisma } from "@/lib/db";
 import { deletePortfolioValueCache } from "@/lib/portfolio-value-cache";
 import type { CachedPerformanceResult } from "@/lib/performance-cache-client";
 
-export type { CachedPerformanceResult, PerformancePrefs } from "@/lib/performance-cache-client";
-export {
-  buildPerformanceCacheKey,
-  loadPerformancePrefs,
-  savePerformancePrefs,
-  PERFORMANCE_PREFS_KEY,
-} from "@/lib/performance-cache-client";
-
-/** 交易／帳戶任何一筆被新增、刪除或原地編輯，指紋都會變。筆數抓新增刪除，
- *  max(updatedAt) 抓原地編輯（改舊交易的數量／單價時筆數跟最大日期都不變，
- *  只靠前兩者會繼續回傳過期快取）。股票分割是直接改寫交易，同樣會反映在
- *  updatedAt 上。scripts/mcp-server.ts 的 get_performance 也用這支判斷新鮮度。 */
-export async function getDataFingerprint(): Promise<string> {
-  const [txAgg, accountAgg] = await Promise.all([
-    prisma.transaction.aggregate({
-      _count: true,
-      _max: { date: true, updatedAt: true },
-    }),
-    prisma.account.aggregate({
-      _count: true,
-      _sum: { cash: true },
-      _max: { updatedAt: true },
-    }),
-  ]);
-  const raw = [
-    txAgg._count,
-    txAgg._max.date?.toISOString() ?? "",
-    txAgg._max.updatedAt?.toISOString() ?? "",
-    accountAgg._count,
-    accountAgg._sum.cash?.toString() ?? "0",
-    accountAgg._max.updatedAt?.toISOString() ?? "",
-  ].join(":");
-  return createHash("sha256").update(raw).digest("hex").slice(0, 16);
-}
+/** 分析頁整份績效結果的 server 端快取（PerformanceSnapshot），以
+ *  getDataFingerprint() 判斷是否過期。 */
 
 export async function getCachedPerformance(
   cacheKey: string,

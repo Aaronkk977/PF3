@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizePeriodDates } from "@/lib/date-keys";
 import { getPerformance } from "@/lib/performance";
 import {
-  buildPerformanceCacheKey,
   getCachedPerformance,
   setCachedPerformance,
 } from "@/lib/performance-cache";
+import { buildPerformanceCacheKey } from "@/lib/performance-cache-client";
 import { withRequestScope } from "@/lib/request-priority";
 
 function parseRequest(request: NextRequest) {

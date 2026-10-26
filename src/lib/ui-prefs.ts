@@ -1,5 +1,10 @@
 import { ENTIRE_PORTFOLIO_FILTER_ID } from "@/lib/chart-constants";
 import type { MarketFilter } from "@/lib/market-session";
+import type { CachedPerformanceResult } from "@/lib/performance-cache-client";
+import {
+  normalizeCustomPresets,
+  type PerformancePeriodPreset,
+} from "@/lib/performance-period-presets";
 import { parseJsonSafe } from "@/lib/utils";
 
 export const HOLDINGS_PREFS_KEY = "portfolio-holdings-prefs";
@@ -213,8 +218,11 @@ export function loadTransactionsPrefs(): TransactionsPrefs | null {
   };
 }
 
-export function saveTransactionsPrefs(prefs: TransactionsPrefs): void {
-  writeJson(TRANSACTIONS_PREFS_KEY, prefs);
+/** 只更新傳入的欄位、保留其他欄位：交易頁的新增表單跟交易列表各自存自己
+ *  那幾個欄位，不會互相覆蓋。 */
+export function updateTransactionsPrefs(patch: Partial<TransactionsPrefs>): void {
+  const current = loadTransactionsPrefs() ?? { accountId: "", type: "BUY" };
+  writeJson(TRANSACTIONS_PREFS_KEY, { ...current, ...patch });
 }
 
 export function loadRecentInstruments(): RecentInstrument[] {
@@ -288,4 +296,82 @@ export function loadDashboardPrefs(): DashboardPrefs {
 export function saveDashboardPrefs(prefs: Partial<DashboardPrefs>): void {
   const current = loadDashboardPrefs();
   writeJson(DASHBOARD_PREFS_KEY, { ...current, ...prefs });
+}
+
+// ── 分析頁 ──────────────────────────────────────────────────────────────────
+
+export const PERFORMANCE_PREFS_KEY = "portfolio-performance-prefs";
+
+export type MetricPanelId = "key" | "calculation" | "trading" | "risk";
+
+export const DEFAULT_METRIC_PANEL_ORDER: MetricPanelId[] = [
+  "key",
+  "calculation",
+  "trading",
+  "risk",
+];
+
+const METRIC_PANEL_IDS = new Set<MetricPanelId>(DEFAULT_METRIC_PANEL_ORDER);
+
+export function isValidMetricPanelOrder(
+  order: unknown,
+): order is MetricPanelId[] {
+  return (
+    Array.isArray(order) &&
+    order.length === 4 &&
+    order.every((id) => METRIC_PANEL_IDS.has(id as MetricPanelId)) &&
+    new Set(order).size === 4
+  );
+}
+
+/** 舊版三欄排序 → 插入 Calculation 面板 */
+export function migrateMetricPanelOrder(order: unknown): MetricPanelId[] {
+  if (isValidMetricPanelOrder(order)) return order;
+  if (
+    Array.isArray(order) &&
+    order.length === 3 &&
+    order.every((id) => typeof id === "string")
+  ) {
+    const legacy = order as MetricPanelId[];
+    const hasCalc = legacy.includes("calculation");
+    if (!hasCalc) {
+      const keyIdx = legacy.indexOf("key");
+      const next = [...legacy];
+      next.splice(keyIdx >= 0 ? keyIdx + 1 : 1, 0, "calculation");
+      if (isValidMetricPanelOrder(next)) return next;
+    }
+  }
+  return DEFAULT_METRIC_PANEL_ORDER;
+}
+
+export type PerformancePrefs = {
+  start: string;
+  end: string;
+  benchmark?: string;
+  portfolios?: string[];
+  accountIds?: string[];
+  benchmarks?: string[];
+  metricPanelOrder?: MetricPanelId[];
+  activePeriodPresetId?: string | null;
+  customPeriodPresets?: PerformancePeriodPreset[];
+  settingsExpanded?: boolean;
+  /** 累積報酬圖是否顯示全帳戶合計線 */
+  showEntirePortfolio?: boolean;
+  cachedResult?: CachedPerformanceResult;
+  cachedAt?: string;
+  cacheKey?: string;
+};
+
+export function loadCustomPeriodPresets(
+  prefs: PerformancePrefs | null | undefined,
+): PerformancePeriodPreset[] {
+  return normalizeCustomPresets(prefs?.customPeriodPresets);
+}
+
+export function loadPerformancePrefs(): PerformancePrefs | null {
+  return readJson<PerformancePrefs>(PERFORMANCE_PREFS_KEY);
+}
+
+export function savePerformancePrefs(prefs: PerformancePrefs): void {
+  writeJson(PERFORMANCE_PREFS_KEY, prefs);
 }

@@ -94,3 +94,21 @@ function runMigrations(dbFilePath, migrationsDir) {
 }
 
 module.exports = { runMigrations };
+
+// 被 electron/main.js 用 fork 當獨立行程執行時：migration 是同步的 SQLite 操作，
+// 放在主行程跑會卡住 Electron 的事件迴圈，啟動畫面畫不出來也拖不動。
+// 參數：<資料庫檔案路徑> <migrations 資料夾>，結果用 IPC 回報。
+if (require.main === module) {
+  const [dbFilePath, migrationsDir] = process.argv.slice(2);
+  let message;
+  try {
+    message = { ok: true, applied: runMigrations(dbFilePath, migrationsDir) };
+  } catch (err) {
+    message = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  process.send?.(message, () => process.exit(message.ok ? 0 : 1));
+  if (!process.send) {
+    console.log(JSON.stringify(message));
+    process.exit(message.ok ? 0 : 1);
+  }
+}

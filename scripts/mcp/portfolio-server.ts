@@ -23,8 +23,13 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { prisma } from "@/lib/db";
-import { parseCalendarDate } from "@/lib/date-keys";
-import { getDataFingerprint } from "@/lib/performance-cache";
+import {
+  createNote as createNoteRecord,
+  searchNotes as searchNoteRecords,
+  updateNote as updateNoteRecord,
+  type NoteWithRelations,
+} from "@/lib/notes";
+import { getDataFingerprint } from "@/lib/data-version";
 import {
   getHoldings as getEngineHoldings,
   getPortfolioSummary as getEngineSummary,
@@ -172,14 +177,9 @@ async function getPerformance(args: { series_days?: number }) {
   });
 }
 
-// ── notes: shared helpers ────────────────────────────────────────────────────
-
-const NOTE_INCLUDE = {
-  instruments: { include: { instrument: true } },
-  tags: { include: { tag: true } },
-} satisfies Prisma.NoteInclude;
-
-type NoteWithRelations = Prisma.NoteGetPayload<{ include: typeof NOTE_INCLUDE }>;
+// ── notes ────────────────────────────────────────────────────────────────────
+// 讀寫都走 src/lib/notes.ts（跟網頁 /api/notes 同一套驗證與寫入），這裡只負責
+// 把 MCP 的參數名稱轉過去、把結果整理成給 Claude 看的格式。
 
 function formatNote(n: NoteWithRelations) {
   return {
@@ -195,41 +195,6 @@ function formatNote(n: NoteWithRelations) {
   };
 }
 
-async function getNoteById(id: string) {
-  const row = await prisma.note.findUniqueOrThrow({ where: { id }, include: NOTE_INCLUDE });
-  return formatNote(row);
-}
-
-async function assertNoteKindExists(kind: string) {
-  const exists = await prisma.noteKind.findUnique({ where: { name: kind } });
-  if (exists) return;
-  const kinds = await prisma.noteKind.findMany({ orderBy: { sortOrder: "asc" }, select: { name: true } });
-  throw new Error(`找不到筆記類型「${kind}」。目前可用類型：${kinds.map((k) => k.name).join("、") || "（無，請先在網頁上新增類型）"}`);
-}
-
-/** symbols -> instrumentIds，找不到的代號會直接丟錯，避免筆記悄悄連錯（或連不到）標的 */
-async function resolveInstrumentIds(symbols: string[]): Promise<string[]> {
-  const wanted = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
-  if (wanted.length === 0) return [];
-  const found = await prisma.instrument.findMany({ where: { symbol: { in: wanted } }, select: { id: true, symbol: true } });
-  const foundSymbols = new Set(found.map((f) => f.symbol));
-  const missing = wanted.filter((s) => !foundSymbols.has(s));
-  if (missing.length > 0) {
-    throw new Error(`找不到標的代號：${missing.join("、")}（請確認代號是否存在於系統中）`);
-  }
-  return found.map((f) => f.id);
-}
-
-async function resolveTagIds(tagNames: string[]): Promise<string[]> {
-  const names = [...new Set(tagNames.map((t) => t.trim()).filter(Boolean))];
-  const ids: string[] = [];
-  for (const name of names) {
-    const tag = await prisma.tag.upsert({ where: { name }, create: { name }, update: {} });
-    ids.push(tag.id);
-  }
-  return ids;
-}
-
 // ── tool: create_note ────────────────────────────────────────────────────────
 
 async function createNote(args: {
@@ -240,31 +205,15 @@ async function createNote(args: {
   symbols?: string[];
   tags?: string[];
 }) {
-  const title = typeof args.title === "string" ? args.title.trim() : "";
-  if (!title) throw new Error("標題必填");
-
-  const content = typeof args.content === "string" ? args.content.trim() : "";
-  if (!content) throw new Error("內容必填");
-
-  const kind = typeof args.kind === "string" ? args.kind.trim() : "";
-  if (!kind) throw new Error("類型必填");
-  await assertNoteKindExists(kind);
-
-  const noteDate = args.note_date ? parseCalendarDate(args.note_date) : parseCalendarDate(fmtDate(new Date()));
-
-  const instrumentIds = await resolveInstrumentIds(args.symbols ?? []);
-  const tagIds = await resolveTagIds(args.tags ?? []);
-
-  const note = await prisma.note.create({ data: { title, content, kind, noteDate } });
-
-  for (const instrumentId of instrumentIds) {
-    await prisma.noteOnInstrument.create({ data: { noteId: note.id, instrumentId } });
-  }
-  for (const tagId of tagIds) {
-    await prisma.noteOnTag.create({ data: { noteId: note.id, tagId } });
-  }
-
-  return getNoteById(note.id);
+  const note = await createNoteRecord({
+    title: args.title,
+    content: args.content,
+    kind: args.kind,
+    noteDate: args.note_date,
+    symbols: args.symbols ?? [],
+    tags: args.tags ?? [],
+  });
+  return formatNote(note);
 }
 
 // ── tool: update_note ────────────────────────────────────────────────────────
@@ -280,63 +229,16 @@ async function updateNote(args: {
   tags?: string[];
 }) {
   if (!args.id) throw new Error("id 必填");
-  const existing = await prisma.note.findUnique({ where: { id: args.id } });
-  if (!existing) throw new Error("筆記不存在");
-
-  if (args.content !== undefined && args.append_content !== undefined) {
-    throw new Error("content 與 append_content 不可同時使用（一個是整段取代，一個是附加）");
-  }
-
-  const data: Prisma.NoteUpdateInput = {};
-
-  if (args.title !== undefined) {
-    const trimmed = args.title.trim();
-    if (!trimmed) throw new Error("標題必填");
-    data.title = trimmed;
-  }
-
-  if (args.content !== undefined) {
-    const trimmed = args.content.trim();
-    if (!trimmed) throw new Error("內容必填");
-    data.content = trimmed;
-  } else if (args.append_content !== undefined) {
-    const addition = args.append_content.trim();
-    if (!addition) throw new Error("append_content 不可為空");
-    data.content = `${existing.content}\n\n---\n[${fmtDate(new Date())} 補充]\n${addition}`;
-  }
-
-  if (args.kind !== undefined) {
-    const kind = args.kind.trim();
-    if (!kind) throw new Error("類型必填");
-    await assertNoteKindExists(kind);
-    data.kind = kind;
-  }
-
-  if (args.note_date !== undefined) {
-    data.noteDate = parseCalendarDate(args.note_date);
-  }
-
-  if (Object.keys(data).length > 0) {
-    await prisma.note.update({ where: { id: args.id }, data });
-  }
-
-  if (args.symbols !== undefined) {
-    const instrumentIds = await resolveInstrumentIds(args.symbols);
-    await prisma.noteOnInstrument.deleteMany({ where: { noteId: args.id } });
-    for (const instrumentId of instrumentIds) {
-      await prisma.noteOnInstrument.create({ data: { noteId: args.id, instrumentId } });
-    }
-  }
-
-  if (args.tags !== undefined) {
-    const tagIds = await resolveTagIds(args.tags);
-    await prisma.noteOnTag.deleteMany({ where: { noteId: args.id } });
-    for (const tagId of tagIds) {
-      await prisma.noteOnTag.create({ data: { noteId: args.id, tagId } });
-    }
-  }
-
-  return getNoteById(args.id);
+  const note = await updateNoteRecord(args.id, {
+    title: args.title,
+    content: args.content,
+    appendContent: args.append_content,
+    kind: args.kind,
+    noteDate: args.note_date,
+    symbols: args.symbols,
+    tags: args.tags,
+  });
+  return formatNote(note);
 }
 
 // ── tool: search_notes ──────────────────────────────────────────────────────
@@ -350,38 +252,16 @@ async function searchNotes(args: {
   date_to?: string;
   limit?: number;
 }) {
-  const where: Prisma.NoteWhereInput = {};
-
-  if (args.kind) {
-    where.kind = { contains: args.kind };
-  }
-  if (args.keyword) {
-    where.OR = [
-      { title: { contains: args.keyword } },
-      { content: { contains: args.keyword } },
-    ];
-  }
-  if (args.tag) {
-    where.tags = { some: { tag: { name: { contains: args.tag } } } };
-  }
-  if (args.symbol) {
-    where.instruments = {
-      some: { instrument: { symbol: { contains: args.symbol.toUpperCase() } } },
-    };
-  }
-  if (args.date_from || args.date_to) {
-    where.noteDate = {};
-    if (args.date_from) (where.noteDate as Prisma.DateTimeFilter).gte = new Date(args.date_from);
-    if (args.date_to) (where.noteDate as Prisma.DateTimeFilter).lte = new Date(args.date_to + "T23:59:59Z");
-  }
-
-  const rows = await prisma.note.findMany({
-    where,
-    include: NOTE_INCLUDE,
-    orderBy: { noteDate: "desc" },
-    take: args.limit ?? 50,
+  const rows = await searchNoteRecords({
+    kind: args.kind,
+    kindMatch: "contains",
+    keyword: args.keyword,
+    tag: args.tag,
+    symbol: args.symbol,
+    dateFrom: args.date_from,
+    dateTo: args.date_to,
+    limit: args.limit ?? 50,
   });
-
   return rows.map(formatNote);
 }
 

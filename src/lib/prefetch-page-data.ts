@@ -9,8 +9,7 @@ import {
 } from "@/lib/holdings-cache-client";
 import { pageRequestHeaders } from "@/lib/page-request-headers";
 import { parseResponseJson } from "@/lib/utils";
-import { loadHoldingsPrefs } from "@/lib/ui-prefs";
-import { PERFORMANCE_PREFS_KEY } from "@/lib/performance-cache-client";
+import { loadHoldingsPrefs, loadPerformancePrefs } from "@/lib/ui-prefs";
 
 /** Holdings only on idle prefetch — transactions is heavy and can race Next dev compile. */
 const PREFETCH_TARGETS = [
@@ -82,15 +81,7 @@ export function prefetchPerformanceWarm(): void {
 
   scheduleIdle(() => {
     try {
-      const raw = localStorage.getItem(PERFORMANCE_PREFS_KEY);
-      const prefs = raw
-        ? (JSON.parse(raw) as {
-            start?: string;
-            end?: string;
-            accountIds?: string[];
-            benchmarks?: string[];
-          })
-        : null;
+      const prefs = loadPerformancePrefs();
 
       const now = new Date();
       const defaultStart = new Date(

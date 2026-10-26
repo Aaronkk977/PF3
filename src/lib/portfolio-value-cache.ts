@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import type { TransactionMeta } from "@/lib/data-version";
 import type { CashFlowEvent } from "@/lib/portfolio-history";
 
 export type PortfolioValueEndState = {
@@ -22,12 +23,6 @@ export type PortfolioValueCachePayload = {
   maxUpdatedAt?: string;
 };
 
-export type TransactionMeta = {
-  txCount: number;
-  maxTxDate: string;
-  maxUpdatedAt: string;
-};
-
 export function buildPortfolioValueCacheKey(
   accountIds: string[] | string | undefined,
   periodStart: string,
@@ -39,42 +34,6 @@ export function buildPortfolioValueCacheKey(
       : [];
   const acc = ids.length ? ids.join(",") : "all";
   return `value|start:${periodStart}|acc:${acc}`;
-}
-
-export async function getTransactionMeta(): Promise<TransactionMeta> {
-  const agg = await prisma.transaction.aggregate({
-    _count: true,
-    _max: { date: true, updatedAt: true },
-  });
-  const maxTxDate = agg._max.date
-    ? agg._max.date.toISOString().slice(0, 10)
-    : "";
-  return {
-    txCount: agg._count,
-    maxTxDate,
-    maxUpdatedAt: agg._max.updatedAt?.toISOString() ?? "",
-  };
-}
-
-/** 從 since 之後有變動的交易：拆成「既有交易被原地編輯」跟「新增的交易」。
- *  前者不管日期都會讓已算好的市值序列失準；後者只要日期不早於快取尾端，
- *  增量延伸就能正確納入。 */
-export async function getTransactionChangesSince(since: string): Promise<{
-  editedCount: number;
-  addedDates: Date[];
-}> {
-  const sinceDate = new Date(since);
-  const rows = await prisma.transaction.findMany({
-    where: { updatedAt: { gt: sinceDate } },
-    select: { date: true, createdAt: true },
-  });
-  let editedCount = 0;
-  const addedDates: Date[] = [];
-  for (const r of rows) {
-    if (r.createdAt > sinceDate) addedDates.push(r.date);
-    else editedCount++;
-  }
-  return { editedCount, addedDates };
 }
 
 export async function getPortfolioValueCache(

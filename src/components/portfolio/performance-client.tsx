@@ -34,10 +34,12 @@ import {
   buildPerformanceCacheKey,
   isLegacyNormalizedChart,
   isStalePerformanceCache,
+} from "@/lib/performance-cache-client";
+import {
   loadCustomPeriodPresets,
   loadPerformancePrefs,
   savePerformancePrefs,
-} from "@/lib/performance-cache-client";
+} from "@/lib/ui-prefs";
 import { useChartTheme } from "@/hooks/use-chart-theme";
 import { resolveAccountSwatchColor } from "@/lib/chart-palette";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";

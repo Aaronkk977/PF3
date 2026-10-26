@@ -19,7 +19,7 @@ import {
   loadPerformancePrefs,
   savePerformancePrefs,
   type MetricPanelId,
-} from "@/lib/performance-cache-client";
+} from "@/lib/ui-prefs";
 import { formatPercent } from "@/lib/utils";
 
 type MetricPanelsData = {

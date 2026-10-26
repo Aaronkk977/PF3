@@ -1,4 +1,5 @@
 import { ENTIRE_PORTFOLIO_FILTER_ID } from "@/lib/chart-constants";
+import { readStoredEntry, writeStoredEntry } from "@/lib/client-data-cache";
 
 export const HOLDINGS_VALUE_CACHE_KEY = "portfolio-holdings-value-cache";
 
@@ -98,35 +99,14 @@ export function buildValueHistoryUrl(
 export function loadHoldingsValueCache(
   cacheKey: string,
 ): HoldingsValueCacheEntry | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(HOLDINGS_VALUE_CACHE_KEY);
-    if (!raw) return null;
-    const entries = JSON.parse(raw) as HoldingsValueCacheEntry[];
-    if (!Array.isArray(entries)) return null;
-    const hit = entries.find((e) => e.cacheKey === cacheKey);
-    if (!hit?.lines?.length || !Array.isArray(hit.chartData)) return null;
-    return hit;
-  } catch {
-    return null;
-  }
+  const hit = readStoredEntry<HoldingsValueCacheEntry>(
+    HOLDINGS_VALUE_CACHE_KEY,
+    cacheKey,
+  );
+  if (!hit?.lines?.length || !Array.isArray(hit.chartData)) return null;
+  return hit;
 }
 
 export function saveHoldingsValueCache(entry: HoldingsValueCacheEntry): void {
-  if (typeof window === "undefined") return;
-  try {
-    const raw = localStorage.getItem(HOLDINGS_VALUE_CACHE_KEY);
-    let entries: HoldingsValueCacheEntry[] = [];
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) entries = parsed;
-    }
-    const next = [entry, ...entries.filter((e) => e.cacheKey !== entry.cacheKey)];
-    localStorage.setItem(
-      HOLDINGS_VALUE_CACHE_KEY,
-      JSON.stringify(next.slice(0, 12)),
-    );
-  } catch {
-    // ignore quota errors
-  }
+  writeStoredEntry(HOLDINGS_VALUE_CACHE_KEY, entry, 12);
 }

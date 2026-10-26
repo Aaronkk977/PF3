@@ -17,7 +17,7 @@ import type { PerformancePeriodPreset } from "@/lib/performance-period-presets";
 import {
   loadCustomPeriodPresets,
   loadPerformancePrefs,
-} from "@/lib/performance-cache-client";
+} from "@/lib/ui-prefs";
 import {
   tradesGranularityLabel,
   type RealizedTradeRow,

@@ -12,7 +12,7 @@
     "start": "next start",
     "start:prod": "node .next/standalone/server.js",
     "lint": "next lint",
-    "test": "tsx --tsconfig tsconfig.test.json --test src/lib/*.test.ts",
+    "test": "tsx --tsconfig tsconfig.test.json --test src/lib/*.test.ts electron/*.test.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",

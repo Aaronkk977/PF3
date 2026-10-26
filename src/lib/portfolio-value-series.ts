@@ -11,13 +11,15 @@ import {
   type CashFlowEvent,
 } from "@/lib/portfolio-history";
 import {
-  buildPortfolioValueCacheKey,
-  getPortfolioValueCache,
   getTransactionChangesSince,
   getTransactionMeta,
+  type TransactionMeta,
+} from "@/lib/data-version";
+import {
+  buildPortfolioValueCacheKey,
+  getPortfolioValueCache,
   setPortfolioValueCache,
   type PortfolioValueCachePayload,
-  type TransactionMeta,
 } from "@/lib/portfolio-value-cache";
 import {
   calendarDateKeys,

@@ -5,7 +5,6 @@ const fs = require("fs");
 const http = require("http");
 const net = require("net");
 const { fork } = require("child_process");
-const { runMigrations } = require("./migrate");
 
 const HOSTNAME = "127.0.0.1";
 // 涵蓋「等 server process 活著」+「等開機維護（股票分割偵測＋幣別／
@@ -103,33 +102,60 @@ function waitForServer(url, timeoutMs) {
       if (settled) return;
       const req = http.get(url, (res) => {
         res.resume();
-        finish();
-      });
-      req.on("error", () => {
-        if (settled) return;
-        if (Date.now() > deadline) {
-          finish(
-            new Error(`Server did not respond within ${timeoutMs}ms at ${url}`),
-          );
-          return;
+        // 5xx 代表伺服器活著但還沒準備好（或啟動中出錯），繼續等到逾時，
+        // 不要把錯誤頁當成「啟動完成」開給使用者
+        if ((res.statusCode ?? 500) < 500) {
+          finish();
+        } else {
+          retry();
         }
-        setTimeout(attempt, 400);
       });
+      req.on("error", retry);
+    }
+    function retry() {
+      if (settled) return;
+      if (Date.now() > deadline) {
+        finish(
+          new Error(`Server did not respond within ${timeoutMs}ms at ${url}`),
+        );
+        return;
+      }
+      setTimeout(attempt, 400);
     }
     attempt();
   });
 }
 
-/** 對現有 SQLite DB 套用尚未套用的 migration（不動已套用過的，安全） */
+/** 對現有 SQLite DB 套用尚未套用的 migration（不動已套用過的，安全）。
+ *  在獨立行程跑（見 migrate.js 結尾），主行程不會被同步的 SQLite 操作卡住，
+ *  啟動畫面在 migration 期間照常顯示。 */
 function applyPendingMigrations(dbFilePath) {
   const migrationsDir = path.join(getResourcesRoot(), "prisma", "migrations");
-  try {
-    return runMigrations(dbFilePath, migrationsDir);
-  } catch (err) {
-    throw new Error(
-      `資料庫更新失敗：${err instanceof Error ? err.message : String(err)}`,
+  return new Promise((resolve, reject) => {
+    const child = fork(
+      path.join(__dirname, "migrate.js"),
+      [dbFilePath, migrationsDir],
+      { stdio: ["ignore", "inherit", "inherit", "ipc"] },
     );
-  }
+    let result = null;
+    child.on("message", (msg) => {
+      result = msg;
+    });
+    child.once("error", (err) => {
+      reject(new Error(`資料庫更新失敗：${err.message}`));
+    });
+    child.once("exit", (code) => {
+      if (result?.ok) {
+        resolve(result.applied);
+        return;
+      }
+      reject(
+        new Error(
+          `資料庫更新失敗：${result?.error ?? `migration 行程異常結束（code ${code}）`}`,
+        ),
+      );
+    });
+  });
 }
 
 function startNextServer(env) {
@@ -273,7 +299,7 @@ async function bootstrap() {
 
   createSplashWindow();
 
-  applyPendingMigrations(path.join(dataDir, "portfolio.db"));
+  await applyPendingMigrations(path.join(dataDir, "portfolio.db"));
   startNextServer(env);
   await waitForServer(baseUrl, HEALTH_TIMEOUT_MS);
   await waitForServer(`${baseUrl}/api/startup/status`, HEALTH_TIMEOUT_MS);
