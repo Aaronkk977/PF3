@@ -4,6 +4,11 @@ import {
 } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import { getExchangeRateOnDate } from "@/lib/fx-rates";
+import {
+  consumeFifoLots,
+  reduceFifoLotsCost,
+  type FifoLot,
+} from "@/lib/fifo-lots";
 import { getUsdToTwdRate, normalizeCurrencyCode } from "@/lib/fx";
 import { inferInstrumentCurrency } from "@/lib/instrument-currency";
 import { toNumber } from "@/lib/utils";
@@ -21,11 +26,8 @@ type TxRow = {
   instrumentId: string | null;
 };
 
-type Lot = {
-  qty: number;
-  /** 台股：買進交割成本（含手續費）；美股等：成交價金 */
-  costBase: number;
-};
+/** costBase：台股為買進交割成本（含手續費）；美股等為成交價金 */
+type Lot = FifoLot;
 
 function txAccountWhere(accountIds: string[]) {
   return accountIds.length ? { accountId: { in: accountIds } } : {};
@@ -191,19 +193,7 @@ export async function aggregatePeriodRealizedPnl(
           );
       lots.push({ qty: tx.quantity, costBase });
     } else if (tx.type === "SELL" && tx.quantity > 0) {
-      let remaining = tx.quantity;
-      let matchedCostBase = 0;
-
-      while (remaining > 0 && lots.length > 0) {
-        const lot = lots[0]!;
-        const used = Math.min(remaining, lot.qty);
-        const sliceCost = (lot.costBase / lot.qty) * used;
-        matchedCostBase += sliceCost;
-        lot.costBase -= sliceCost;
-        lot.qty -= used;
-        remaining -= used;
-        if (lot.qty <= 0.0000001) lots.shift();
-      }
+      const { matchedCostBase } = consumeFifoLots(lots, tx.quantity);
 
       if (inPeriod(tx.date)) {
         realizedPnl += await sellRealizedAmount(
@@ -223,15 +213,7 @@ export async function aggregatePeriodRealizedPnl(
           );
       if (inPeriod(tx.date)) dividends += divBase;
 
-      if (!tw) {
-        let remaining = divBase;
-        for (const lot of lots) {
-          if (remaining <= 0) break;
-          const cut = Math.min(lot.costBase, remaining);
-          lot.costBase -= cut;
-          remaining -= cut;
-        }
-      }
+      if (!tw) reduceFifoLotsCost(lots, divBase);
     }
 
     lotsByKey.set(key, lots);

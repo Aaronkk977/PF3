@@ -973,7 +973,51 @@ function applyTaiwanQuoteClose(
   };
 }
 
+/** 即時報價的請求內去重快取（詳見 spec.md）。
+ *
+ *  分析頁一次請求會為「整體」線、「全部帳戶」線、每個帳戶各自的線分別呼叫
+ *  resolvePortfolioValueSeries——只要某檔股票被任一帳戶持有，它就必然同時
+ *  出現在「整體」跟「該帳戶」兩次呼叫的股票清單裡。當天 K 線還沒收盤時，這些
+ *  呼叫會各自落到這支即時報價 fallback，若沒有去重，同一檔股票的「今天」報價
+ *  在同一次請求裡會被獨立打好幾次 Yahoo，兩次抓到的不保證是同一個 tick，
+ *  導致「整體」線跟「個別帳戶」線用不同報價、數字對不起來。
+ *
+ *  快取的是「進行中的 promise」而不只是「算完的值」：分析頁裡有些帳戶的計算是
+ *  併發的，若只快取已完成的值，兩個幾乎同時發出的查詢會在快取還空的時候一起
+ *  衝去打 Yahoo。存 promise 才能讓後到的呼叫直接等同一個結果。
+ *
+ *  TTL 訂為 10 秒，對齊 Yahoo 這支 chart 端點自己回的
+ *  `Cache-Control: public, max-age=10`——同一 10 秒窗口內不管誰打幾次，
+ *  Yahoo CDN 回的都是同一份快取資料，我們縮短 TTL 也拿不到更新的價格，純粹
+ *  多打幾次 Yahoo 而已。實測也發現即使是台積電這種高流動性股票，回報價格
+ *  真正跳動的間隔常常有幾十秒甚至更久，比這個 TTL 長得多。 */
+const QUOTE_REQUEST_CACHE_TTL_MS = 10_000;
+const quoteRequestCache = new Map<
+  string,
+  { promise: Promise<QuoteResult>; at: number }
+>();
+
 export async function getQuote(symbol: string): Promise<QuoteResult> {
+  const now = Date.now();
+  const existing = quoteRequestCache.get(symbol);
+  if (existing && now - existing.at < QUOTE_REQUEST_CACHE_TTL_MS) {
+    return existing.promise;
+  }
+
+  const promise = fetchQuoteLive(symbol);
+  quoteRequestCache.set(symbol, { promise, at: now });
+  // fetchQuoteLive 內部已經把自己的例外都吃掉、一律回傳某種 QuoteResult
+  // （必要時 price:0/stale:true），理論上不會走到這裡；留著只是防呆——萬一
+  // 真的丟出例外，不要讓失敗的 promise 卡住快取擋住後續重試。
+  promise.catch(() => {
+    if (quoteRequestCache.get(symbol)?.promise === promise) {
+      quoteRequestCache.delete(symbol);
+    }
+  });
+  return promise;
+}
+
+async function fetchQuoteLive(symbol: string): Promise<QuoteResult> {
   if (isTaiwanVixSymbol(symbol)) {
     const twVix = await fetchTaiwanVixQuote();
     return twVix ?? { symbol: TAIWAN_VIX_SYMBOL, price: 0 };

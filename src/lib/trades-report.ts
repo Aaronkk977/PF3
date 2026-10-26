@@ -6,6 +6,11 @@ import {
 } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import { getExchangeRate } from "@/lib/fx-rates";
+import {
+  consumeFifoLots,
+  reduceFifoLotsCost,
+  type FifoLot,
+} from "@/lib/fifo-lots";
 import { getUsdToTwdRate, normalizeCurrencyCode } from "@/lib/fx";
 import { inferInstrumentCurrency } from "@/lib/instrument-currency";
 import { toNumber } from "@/lib/utils";
@@ -100,11 +105,7 @@ type TxRow = {
   instrumentName: string | null;
 };
 
-type Lot = {
-  qty: number;
-  costBase: number;
-  buyDate: Date;
-};
+type Lot = FifoLot & { buyDate: Date };
 
 const MS_PER_DAY = 24 * 3600 * 1000;
 
@@ -304,23 +305,15 @@ export async function buildTradesReport(
       const costBase = tw ? costNative : toTwd(costNative, tx.instrumentCurrency, fx);
       lots.push({ qty: tx.quantity, costBase, buyDate: tx.date });
     } else if (tx.type === "SELL" && tx.quantity > 0) {
-      let remaining = tx.quantity;
-      let matchedCostBase = 0;
-      let weightedHoldingDays = 0;
-      let matchedQty = 0;
-
-      while (remaining > 0 && lots.length > 0) {
-        const lot = lots[0]!;
-        const used = Math.min(remaining, lot.qty);
-        const sliceCost = (lot.costBase / lot.qty) * used;
-        matchedCostBase += sliceCost;
-        weightedHoldingDays += used * holdingDaysBetween(lot.buyDate, tx.date);
-        matchedQty += used;
-        lot.costBase -= sliceCost;
-        lot.qty -= used;
-        remaining -= used;
-        if (lot.qty <= 0.0000001) lots.shift();
-      }
+      const { matchedQty, matchedCostBase, slices } = consumeFifoLots(
+        lots,
+        tx.quantity,
+      );
+      const weightedHoldingDays = slices.reduce(
+        (s, slice) =>
+          s + slice.qty * holdingDaysBetween(slice.buyDate!, tx.date),
+        0,
+      );
 
       if (inPeriod(tx.date) && matchedQty > 0) {
         const proceeds = tw
@@ -362,13 +355,7 @@ export async function buildTradesReport(
       }
     } else if (tx.type === "DIVIDEND" && tx.quantity > 0 && !tw) {
       const divBase = toTwd(tx.quantity * tx.price, tx.instrumentCurrency, fx);
-      let remaining = divBase;
-      for (const lot of lots) {
-        if (remaining <= 0) break;
-        const cut = Math.min(lot.costBase, remaining);
-        lot.costBase -= cut;
-        remaining -= cut;
-      }
+      reduceFifoLotsCost(lots, divBase);
     }
 
     lotsByKey.set(key, lots);

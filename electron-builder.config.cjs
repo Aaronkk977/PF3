@@ -24,6 +24,7 @@ module.exports = {
     "electron/preload.js",
     "electron/migrate.js",
     "electron/splash.html",
+    "electron/icon.png",
     "package.json",
   ],
   extraResources: [
@@ -41,10 +42,18 @@ module.exports = {
   asarUnpack: ["**/*.node", "**/*.dll.node", "**/@prisma/**", "**/.prisma/**"],
   win: {
     target: "nsis",
-    // 目前沒有付費的程式碼簽章憑證，明確關閉自動簽章，
-    // 避免 electron-builder 嘗試呼叫 signtool.exe 連線 timestamp
-    // server 時，在 CI 環境中無限期 hang 住（曾實際卡住 25 分鐘以上）。
-    signAndEditExecutable: false,
+    // 預設會找 build/icon.ico，但 build/ 在 .gitignore 裡（不進版控），
+    // 所以圖示改放 assets/ 並在這裡明講。給 1024 的 PNG，
+    // electron-builder 會自己轉成多尺寸 .ico 給 exe 和安裝檔用。
+    icon: "assets/icon.png",
+    // 目前沒有付費的程式碼簽章憑證，只關閉「簽章」這步，避免 electron-builder
+    // 嘗試呼叫 signtool.exe 連線 timestamp server 時，在 CI 環境中無限期
+    // hang 住（曾實際卡住 25 分鐘以上）。
+    // 注意：不能用舊的 signAndEditExecutable:false——那個連「把圖示／版本
+    // 資訊寫進 exe」這步也一起關掉了，導致打包出來的 exe 一直是 Electron
+    // 預設的原子圖示，不是這裡設定的 assets/icon.png。signExecutable 只
+    // 關簽章，圖示/metadata 還是會正常寫入。
+    signExecutable: false,
   },
   nsis: {
     oneClick: true,

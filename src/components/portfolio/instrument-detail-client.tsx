@@ -17,8 +17,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { MarkdownNotesEditor } from "@/components/ui/markdown-notes-editor";
-import { MarkdownPreview } from "@/components/ui/markdown-preview";
 import { useNotesDrawer } from "@/components/notes/notes-drawer-context";
 import { clearClientCache, PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import { toLocalDateKey } from "@/lib/date-keys";
@@ -51,7 +49,6 @@ type Instrument = {
   id: string;
   symbol: string;
   name: string | null;
-  notes: string | null;
   assetClass: string;
   currency: string | null;
   tags: string[];
@@ -97,7 +94,7 @@ export function InstrumentDetailClient({
   chartType?: "candlestick" | "line";
   relatedNotes: RelatedNote[];
 }) {
-  const { open: openNote } = useNotesDrawer();
+  const { open: openNote, openNewNoteFor } = useNotesDrawer();
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("from");
@@ -106,7 +103,6 @@ export function InstrumentDetailClient({
   const [usdToTwd, setUsdToTwd] = useState(32);
   const [twdToBase, setTwdToBase] = useState<number | null>(1);
   const [displayName, setDisplayName] = useState(instrument.name ?? "");
-  const [notes, setNotes] = useState(instrument.notes ?? "");
 
   // ── 快速新增交易：直接在標的頁記錄，不必跑去 Transactions 頁再回來 ──
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -214,12 +210,6 @@ export function InstrumentDetailClient({
   // Run once on mount only
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [notesEditing, setNotesEditing] = useState(
-    () => !(instrument.notes ?? "").trim(),
-  );
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileSaved, setProfileSaved] = useState(false);
-
   const [tags, setTags] = useState(instrument.tags.join(", "));
   const [tagsSaving, setTagsSaving] = useState(false);
 
@@ -266,46 +256,27 @@ export function InstrumentDetailClient({
   );
 
   async function persistProfile() {
-    setProfileSaving(true);
-    setProfileSaved(false);
-    try {
-      const res = await fetch(`/api/instruments/${instrument.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: displayName.trim() || null,
-          notes: notes.trim() || null,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        alert(err.error ?? "儲存失敗");
-        return;
-      }
-      const data = (await res.json()) as {
-        name: string | null;
-        notes: string | null;
-      };
-      setDisplayName(data.name ?? "");
-      setNotes(data.notes ?? "");
-      if ((data.notes ?? "").trim()) {
-        setNotesEditing(false);
-      }
-      setProfileSaved(true);
-      // Invalidate all page-level client caches that embed instrument names,
-      // so Holdings / Transactions / Dashboard show the new name immediately
-      // on next visit instead of serving stale sessionStorage data.
-      clearClientCache(PAGE_CACHE_KEYS.dashboard);
-      clearClientCache(PAGE_CACHE_KEYS.holdings);
-      clearClientCache(PAGE_CACHE_KEYS.transactions);
-      router.refresh();
-    } finally {
-      setProfileSaving(false);
+    const res = await fetch(`/api/instruments/${instrument.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: displayName.trim() || null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error ?? "儲存失敗");
+      return;
     }
-  }
-
-  async function saveProfile() {
-    await persistProfile();
+    const data = (await res.json()) as { name: string | null };
+    setDisplayName(data.name ?? "");
+    // Invalidate all page-level client caches that embed instrument names,
+    // so Holdings / Transactions / Dashboard show the new name immediately
+    // on next visit instead of serving stale sessionStorage data.
+    clearClientCache(PAGE_CACHE_KEYS.dashboard);
+    clearClientCache(PAGE_CACHE_KEYS.holdings);
+    clearClientCache(PAGE_CACHE_KEYS.transactions);
+    router.refresh();
   }
 
   async function commitNameEdit() {
@@ -382,10 +353,7 @@ export function InstrumentDetailClient({
               ref={nameInputRef}
               className="max-w-md text-sm"
               value={displayName}
-              onChange={(e) => {
-                setDisplayName(e.target.value);
-                setProfileSaved(false);
-              }}
+              onChange={(e) => setDisplayName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
@@ -595,62 +563,6 @@ export function InstrumentDetailClient({
               </span>
             </div>
             )}
-          </CardContent>
-        </Card>
-      </PageSection>
-
-      <PageSection id="instrument-notes" title="投資筆記" className="mt-8" navOrder={35}>
-        <Card>
-          <CardHeader>
-            <CardTitle>投資筆記</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-[var(--color-muted)]">
-                  支援 Markdown，可記錄論點與風險。
-                </p>
-                {notes.trim() && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => setNotesEditing((v) => !v)}
-                  >
-                    {notesEditing ? "僅預覽" : "編輯筆記"}
-                  </Button>
-                )}
-              </div>
-
-              {notesEditing ? (
-                <MarkdownNotesEditor
-                  value={notes}
-                  onChange={(v) => {
-                    setNotes(v);
-                    setProfileSaved(false);
-                  }}
-                  placeholder={"## 投資論點\n- 進場理由\n- 目標價\n- 風險…"}
-                  minHeight="16rem"
-                />
-              ) : (
-                <div className="min-h-[8rem] rounded-md border border-[var(--color-card-border)]/80 bg-[color-mix(in_srgb,var(--color-background)_60%,var(--color-card))] px-3 py-3">
-                  <MarkdownPreview
-                    content={notes}
-                    emptyHint="尚無筆記。點「編輯筆記」或切換編輯後撰寫並儲存。"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={saveProfile} disabled={profileSaving}>
-                {profileSaving ? "儲存中…" : "儲存筆記"}
-              </Button>
-              {profileSaved && (
-                <span className="text-xs text-[var(--color-positive)]">已儲存</span>
-              )}
-            </div>
           </CardContent>
         </Card>
       </PageSection>
@@ -868,8 +780,23 @@ export function InstrumentDetailClient({
 
       <PageSection id="instrument-related-notes" title="相關筆記" className="mt-8" navOrder={45}>
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle>相關筆記</CardTitle>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() =>
+                openNewNoteFor({
+                  id: instrument.id,
+                  symbol: instrument.symbol,
+                  name: instrument.name,
+                })
+              }
+            >
+              + 新增筆記
+            </Button>
           </CardHeader>
           <CardContent className="space-y-2">
             {relatedNotes.length === 0 ? (

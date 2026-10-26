@@ -81,7 +81,14 @@ function nextDuplicateTitle(sourceTitle: string, existingTitles: Set<string>): s
 }
 
 export function NotesDrawer() {
-  const { isOpen, pendingNoteId, close, consumePendingNoteId } = useNotesDrawer();
+  const {
+    isOpen,
+    pendingNoteId,
+    pendingNewNoteInstrument,
+    close,
+    consumePendingNoteId,
+    consumePendingNewNoteInstrument,
+  } = useNotesDrawer();
 
   const [notes, setNotes] = useState<NoteJson[]>(
     () => readClientCache<NoteJson[]>(PAGE_CACHE_KEYS.notes) ?? [],
@@ -154,6 +161,21 @@ export function NotesDrawer() {
       consumePendingNoteId();
     }
   }, [isOpen, pendingNoteId, notes, consumePendingNoteId]);
+
+  useEffect(() => {
+    if (!isOpen || !pendingNewNoteInstrument || kinds.length === 0) return;
+    const initial = {
+      ...emptyForm(kinds[0]?.name ?? ""),
+      instruments: [pendingNewNoteInstrument],
+    };
+    setEditingId(null);
+    setEditorIsNewNote(true);
+    setForm(initial);
+    lastSavedSnapshotRef.current = JSON.stringify(initial);
+    setAutosaveStatus("idle");
+    setViewMode("editor");
+    consumePendingNewNoteInstrument();
+  }, [isOpen, pendingNewNoteInstrument, kinds, consumePendingNewNoteInstrument]);
 
   // 智慧自動儲存：欄位變動後 1.5 秒沒有新的變動、且標題/內容/類型都齊全時自動存檔，
   // 不打斷正在輸入的使用者，也不會為空白草稿建立垃圾筆記。

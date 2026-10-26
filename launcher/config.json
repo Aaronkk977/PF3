@@ -1,5 +1,5 @@
 {
-  "port": 3847,
+  "port": 4720,
   "listenHost": "127.0.0.1",
   "healthTimeoutSeconds": 120,
   "browserAppMode": true,

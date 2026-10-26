@@ -99,6 +99,9 @@ independent of the source checkout.
 ```powershell
 npm version patch          # bumps package.json version + creates a git tag
 git push origin main --tags
+
+npm version minor          # new functions
+npm version major          # big changes
 ```
 
 Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which builds

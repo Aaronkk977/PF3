@@ -177,6 +177,8 @@ export async function getPerformance(
   options?: {
     accountIds?: string[];
     benchmarkSymbols?: string[];
+    /** 略過 PortfolioValueSnapshot 快取，整段重算（分析頁的「重新計算」）。 */
+    force?: boolean;
   },
   onProgress?: (update: PerformanceProgressUpdate) => void,
 ): Promise<PerformanceMetrics> {
@@ -207,6 +209,7 @@ export async function getPerformance(
   const { points: portfolioPoints, cashFlows: portfolioCashFlows } =
     await resolvePortfolioValueSeries(periodStart, periodEnd, {
       accountIds: selectedIds,
+      force: options?.force,
     });
   // 「全部帳戶」跟「目前選取的帳戶」常常是同一組（沒篩選帳戶時就是全選），
   // 這種情況下面這次呼叫其實是在算一模一樣的東西——resolvePortfolioValueSeries
@@ -214,6 +217,7 @@ export async function getPerformance(
   const { points: entirePortfolioPoints, cashFlows: entirePortfolioCashFlows } =
     await resolvePortfolioValueSeries(periodStart, periodEnd, {
       accountIds: allAccountIds,
+      force: options?.force,
     });
   const rawValues = portfolioPoints.map((p) => p.value);
   const startValue = rawValues[0] ?? 0;
@@ -270,7 +274,7 @@ export async function getPerformance(
     const { points, cashFlows: accFlows } = await resolvePortfolioValueSeries(
       periodStart,
       periodEnd,
-      { accountIds: [acc.id] },
+      { accountIds: [acc.id], force: options?.force },
     );
     const dataKey = accountDataKey(acc.id);
     chartLines.push({

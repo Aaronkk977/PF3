@@ -1,6 +1,12 @@
 import { mapWithConcurrency } from "@/lib/async-pool";
 import { externalReadLimiter } from "@/lib/concurrency-limiter";
 import { toLocalDateKey } from "@/lib/date-keys";
+import {
+  consumeFifoLots,
+  reduceFifoLotsCost,
+  sumFifoLots,
+  type FifoLot,
+} from "@/lib/fifo-lots";
 import { BASE_CURRENCY, getUsdToTwdRate, toBaseCurrency } from "@/lib/fx";
 import { getExchangeRateOnDate, normalizeCurrencyCode } from "@/lib/fx-rates";
 
@@ -82,7 +88,7 @@ export function computeInstrumentPnlFromRates(
     (a, b) => a.date.getTime() - b.date.getTime(),
   );
 
-  const lots: { qty: number; costBase: number }[] = [];
+  const lots: FifoLot[] = [];
   let realizedPnl = 0;
   let realizedCostBasis = 0;
 
@@ -104,19 +110,7 @@ export function computeInstrumentPnlFromRates(
     }
 
     if (tx.type === "SELL" && qty > 0) {
-      let remaining = qty;
-      let matchedCostBase = 0;
-
-      while (remaining > 0 && lots.length > 0) {
-        const lot = lots[0]!;
-        const used = Math.min(remaining, lot.qty);
-        const sliceCost = (lot.costBase / lot.qty) * used;
-        matchedCostBase += sliceCost;
-        lot.costBase -= sliceCost;
-        lot.qty -= used;
-        remaining -= used;
-        if (lot.qty <= 0.0000001) lots.shift();
-      }
+      const { matchedCostBase } = consumeFifoLots(lots, qty);
 
       const proceedsBase = toBaseAtDate(
         qty * price - fee - tax,
@@ -131,18 +125,11 @@ export function computeInstrumentPnlFromRates(
 
     if (tx.type === "DIVIDEND" && qty > 0) {
       const divBase = toBaseAtDate(qty * price, tx.currency, tx.date, rateMap);
-      let remaining = divBase;
-      for (const lot of lots) {
-        if (remaining <= 0) break;
-        const cut = Math.min(lot.costBase, remaining);
-        lot.costBase -= cut;
-        remaining -= cut;
-      }
+      reduceFifoLotsCost(lots, divBase);
     }
   }
 
-  const quantity = lots.reduce((s, l) => s + l.qty, 0);
-  const openCostBasis = lots.reduce((s, l) => s + l.costBase, 0);
+  const { quantity, costBase: openCostBasis } = sumFifoLots(lots);
   const marketValue =
     quantity > 0 && marketPriceInBase > 0 ? quantity * marketPriceInBase : 0;
   const unrealizedPnl = marketValue - openCostBasis;

@@ -13,6 +13,10 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 import { useChartTheme } from "@/hooks/use-chart-theme";
+import {
+  isHitAreaEntry,
+  useLineHoverEmphasis,
+} from "@/hooks/use-line-hover-emphasis";
 import { ENTIRE_PORTFOLIO_DATA_KEY } from "@/lib/chart-constants";
 import { applyThemeToChartLines } from "@/lib/chart-palette";
 
@@ -37,14 +41,17 @@ function PerformanceTooltip({
 }: PerformanceTooltipProps) {
   if (!active || !payload?.length) return null;
 
-  const sortedPayload = [...payload].sort((a, b) => {
-    const av = Number(a.value);
-    const bv = Number(b.value);
-    if (Number.isNaN(av) && Number.isNaN(bv)) return 0;
-    if (Number.isNaN(av)) return 1;
-    if (Number.isNaN(bv)) return -1;
-    return bv - av;
-  });
+  const sortedPayload = payload
+    .filter((entry) => !isHitAreaEntry(entry))
+    .sort((a, b) => {
+      const av = Number(a.value);
+      const bv = Number(b.value);
+      if (Number.isNaN(av) && Number.isNaN(bv)) return 0;
+      if (Number.isNaN(av)) return 1;
+      if (Number.isNaN(bv)) return -1;
+      return bv - av;
+    });
+  if (sortedPayload.length === 0) return null;
 
   return (
     <div
@@ -93,6 +100,7 @@ export function PerformanceChart({
   lines: ChartLineConfig[];
 }) {
   const chartTheme = useChartTheme();
+  const { hitAreaProps, emphasisFor, withHoveredLast } = useLineHoverEmphasis();
   const themedLines = useMemo(
     () => applyThemeToChartLines(lines, chartTheme),
     [lines, chartTheme],
@@ -109,6 +117,15 @@ export function PerformanceChart({
 
   const portfolioLines = themedLines.filter((l) => l.kind === "portfolio");
   const benchmarkLines = themedLines.filter((l) => l.kind === "benchmark");
+  // 組合線先畫、基準線後畫的既有順序保留；被 hover 的那條再抽到最後畫（浮在最上層）
+  const orderedLines = withHoveredLast([...portfolioLines, ...benchmarkLines]);
+
+  const baseWidthOf = (line: ChartLineConfig) => {
+    if (line.kind === "benchmark") return 1.75;
+    return line.dataKey === ENTIRE_PORTFOLIO_DATA_KEY ? 3.5 : 2.5;
+  };
+  const connectNullsOf = (line: ChartLineConfig) =>
+    line.kind === "benchmark" || line.dataKey !== ENTIRE_PORTFOLIO_DATA_KEY;
 
   return (
     <div className="pb-4">
@@ -142,33 +159,40 @@ export function PerformanceChart({
               />
             )}
           />
-          {portfolioLines.map((line) => (
+          {/* 透明粗線：只負責接滑鼠事件，畫在可見折線底下 */}
+          {themedLines.map((line) => (
             <Line
-              key={line.dataKey}
+              key={`hit-${line.dataKey}`}
               type="monotone"
               dataKey={line.dataKey}
-              name={line.label}
-              stroke={line.color}
-              strokeWidth={
-                line.dataKey === ENTIRE_PORTFOLIO_DATA_KEY ? 3.5 : 2.5
-              }
-              dot={false}
-              connectNulls={line.dataKey !== ENTIRE_PORTFOLIO_DATA_KEY}
+              connectNulls={connectNullsOf(line)}
+              {...hitAreaProps(line.dataKey)}
             />
           ))}
-          {benchmarkLines.map((line) => (
-            <Line
-              key={line.dataKey}
-              type="monotone"
-              dataKey={line.dataKey}
-              name={line.label}
-              stroke={line.color}
-              strokeWidth={1.75}
-              strokeDasharray="6 4"
-              dot={false}
-              connectNulls
-            />
-          ))}
+          {orderedLines.map((line) => {
+            const emphasis = emphasisFor(
+              line.dataKey,
+              baseWidthOf(line),
+              line.color,
+            );
+            return (
+              <Line
+                key={line.dataKey}
+                type="monotone"
+                dataKey={line.dataKey}
+                name={line.label}
+                stroke={line.color}
+                strokeWidth={emphasis.strokeWidth}
+                strokeOpacity={emphasis.strokeOpacity}
+                style={emphasis.style}
+                strokeDasharray={line.kind === "benchmark" ? "6 4" : undefined}
+                dot={false}
+                activeDot={{ style: { pointerEvents: "none" } }}
+                connectNulls={connectNullsOf(line)}
+                isAnimationActive={false}
+              />
+            );
+          })}
           </LineChart>
         </ResponsiveContainer>
       </div>

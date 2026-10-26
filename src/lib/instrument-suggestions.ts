@@ -1,4 +1,5 @@
 import { normalizeSymbolInput } from "@/lib/instrument-symbol";
+import { isCryptoSymbol, isTaiwanStockSymbol } from "@/lib/market-utils";
 
 export type InstrumentSuggestion = {
   symbol: string;
@@ -6,6 +7,32 @@ export type InstrumentSuggestion = {
   /** 數字越小越優先：≤-10 最近使用、0 持倉、1 追蹤清單、2 資料庫、3 遠端搜尋 */
   priority: number;
 };
+
+/** 推薦列用的市場分類：只看代號（推薦來源多半沒有幣別／資產類別可用） */
+export type SuggestionMarket = "tw" | "us" | "crypto";
+
+export function suggestionMarketOf(symbol: string): SuggestionMarket {
+  if (isTaiwanStockSymbol(symbol)) return "tw";
+  if (isCryptoSymbol(symbol)) return "crypto";
+  return "us";
+}
+
+/**
+ * 帳戶該推薦哪些市場的標的。優先看這個帳戶實際交易過的標的（帳戶改名、
+ * 同幣別的美股／加密帳戶都分得開）；還沒有交易紀錄時才退回用幣別猜：
+ * TWD → 台股，USD → 美股＋加密。其他幣別無從判斷，回傳 null 代表不篩選。
+ */
+export function inferAccountMarkets(
+  currency: string | null | undefined,
+  tradedSymbols: string[],
+): Set<SuggestionMarket> | null {
+  if (tradedSymbols.length > 0) {
+    return new Set(tradedSymbols.map(suggestionMarketOf));
+  }
+  if (currency === "TWD") return new Set(["tw"]);
+  if (currency === "USD") return new Set(["us", "crypto"]);
+  return null;
+}
 
 /** 名稱若等於代號或空白，不適合顯示在推薦列 */
 export function isPoorSuggestionName(symbol: string, name: string): boolean {
@@ -52,7 +79,31 @@ export function mergeInstrumentSuggestions(
   query: string,
   limit = 15,
   recent: InstrumentSuggestion[] = [],
+  /** 只推薦這些市場的標的；null／未提供時不篩選 */
+  markets?: Set<SuggestionMarket> | null,
 ): { symbol: string; name: string }[] {
+  if (markets) {
+    const filtered = mergeInstrumentSuggestions(
+      priority.filter((i) => markets.has(suggestionMarketOf(i.symbol))),
+      database.filter((i) => markets.has(suggestionMarketOf(i.symbol))),
+      remote.filter((i) => markets.has(suggestionMarketOf(i.symbol))),
+      query,
+      limit,
+      recent.filter((i) => markets.has(suggestionMarketOf(i.symbol))),
+    );
+    // 使用者明確打了關鍵字、但帳戶市場內完全沒有符合的（例如在台股帳戶
+    // 打 AAPL），不要整個擋掉，退回不篩選的結果讓他還是選得到。
+    if (filtered.length > 0 || !query.trim()) return filtered;
+    return mergeInstrumentSuggestions(
+      priority,
+      database,
+      remote,
+      query,
+      limit,
+      recent,
+    );
+  }
+
   const q = query.trim().toLowerCase();
   const seen = new Set<string>();
   const merged: InstrumentSuggestion[] = [];

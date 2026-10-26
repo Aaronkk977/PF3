@@ -174,7 +174,6 @@ export default async function InstrumentPage({
         id: instrument.id,
         symbol: instrument.symbol,
         name: instrument.name,
-        notes: instrument.notes,
         assetClass: instrument.assetClass,
         currency: instrument.currency,
         tags: withoutDeprecatedTags(

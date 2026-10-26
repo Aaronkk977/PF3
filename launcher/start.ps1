@@ -5,7 +5,7 @@ $LauncherDir = $PSScriptRoot
 $ProjectRoot = Split-Path $LauncherDir -Parent
 $configPath = Join-Path $LauncherDir "config.json"
 
-$port = 3847
+$port = 4720
 $listenHost = "127.0.0.1"
 $healthTimeoutSeconds = 120
 $browserAppMode = $true
@@ -19,6 +19,35 @@ if (Test-Path $configPath) {
   if ($null -ne $cfg.browserAppMode) { $browserAppMode = [bool]$cfg.browserAppMode }
   if ($null -ne $cfg.browserMaximized) { $browserMaximized = [bool]$cfg.browserMaximized }
   elseif ($null -ne $cfg.browserFullscreen) { $browserMaximized = [bool]$cfg.browserFullscreen }
+}
+
+function Test-CanBind([string]$ListenHost, [int]$Port) {
+  try {
+    $ip = [System.Net.IPAddress]::Parse($ListenHost)
+    $listener = New-Object System.Net.Sockets.TcpListener $ip, $Port
+    $listener.Start()
+    $listener.Stop()
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Get-FreeListenPort([string]$ListenHost) {
+  $ip = [System.Net.IPAddress]::Parse($ListenHost)
+  $listener = New-Object System.Net.Sockets.TcpListener $ip, 0
+  $listener.Start()
+  try {
+    return [int]$listener.LocalEndpoint.Port
+  } finally {
+    $listener.Stop()
+  }
+}
+
+# WSL/Hyper-V 會動態保留一段 TCP 埠；設定檔裡的 port 一旦落進去，
+# Next listen 會 EACCES，啟動畫面就會等到逾時。先探測、不行就改要系統配。
+if (-not (Test-CanBind $listenHost $port)) {
+  $port = Get-FreeListenPort $listenHost
 }
 
 $baseUrl = "http://${listenHost}:${port}"

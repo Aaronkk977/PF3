@@ -19,8 +19,10 @@ import {
 } from "@/lib/transaction-table-columns";
 import { SymbolSearchInput } from "@/components/portfolio/symbol-search-input";
 import {
+  inferAccountMarkets,
   mergeInstrumentSuggestions,
   resolveSuggestionDisplayName,
+  suggestionMarketOf,
   type InstrumentSuggestion,
 } from "@/lib/instrument-suggestions";
 import { formatSymbolWithName } from "@/lib/instrument-nav";
@@ -468,6 +470,32 @@ export function TransactionsClient({
   const selectedAccount = accounts.find((a) => a.id === form.accountId);
   const accountCurrency = selectedAccount?.currency ?? "TWD";
 
+  // 標的推薦只列選定帳戶所屬市場的標的（台股帳戶不推美股，反之亦然）
+  const accountTransactions = useMemo(
+    () => transactions.filter((t) => t.accountId === form.accountId),
+    [transactions, form.accountId],
+  );
+  const accountMarkets = useMemo(
+    () =>
+      inferAccountMarkets(
+        selectedAccount?.currency,
+        accountTransactions.flatMap((t) => (t.symbol ? [t.symbol] : [])),
+      ),
+    [selectedAccount?.currency, accountTransactions],
+  );
+  // 全域最近使用清單只留 8 筆，篩掉其他市場後可能所剩無幾，用這個帳戶自己
+  // 的交易紀錄補上。
+  const accountRecent = useMemo(() => {
+    const inMarket = (r: RecentInstrument) =>
+      !accountMarkets || accountMarkets.has(suggestionMarketOf(r.symbol));
+    return toRecentSuggestions(
+      mergeRecentLists(
+        recentInstruments.filter(inMarket),
+        recentFromTransactions(accountTransactions),
+      ),
+    );
+  }, [recentInstruments, accountTransactions, accountMarkets]);
+
   const settlement = useMemo(() => {
     if (isCashFlow) {
       return computeTransactionSettlement(
@@ -494,14 +522,14 @@ export function TransactionsClient({
       const controller = new AbortController();
       searchAbort.current = controller;
 
-      const recent = toRecentSuggestions(recentInstruments);
       const local = mergeInstrumentSuggestions(
         priorityInstruments,
         instrumentCatalog,
         [],
         query,
         15,
-        recent,
+        accountRecent,
+        accountMarkets,
       );
       setSymbolSuggestions(local);
 
@@ -533,7 +561,8 @@ export function TransactionsClient({
             remote,
             query,
             15,
-            recent,
+            accountRecent,
+            accountMarkets,
           ),
         );
       } catch (e) {
@@ -543,10 +572,16 @@ export function TransactionsClient({
     [
       instrumentCatalog,
       priorityInstruments,
-      recentInstruments,
+      accountRecent,
+      accountMarkets,
       refreshInstrumentCatalog,
     ],
   );
+
+  useEffect(() => {
+    void updateSuggestions(symbolQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在切換帳戶時重算推薦；updateSuggestions 會隨標的目錄更新換身分，納入會反覆打遠端搜尋
+  }, [form.accountId]);
 
   function handleSymbolQuery(query: string) {
     setSymbolQuery(query);
@@ -769,6 +804,7 @@ export function TransactionsClient({
             "",
             15,
             toRecentSuggestions(nextRecent),
+            accountMarkets,
           ),
         );
       }

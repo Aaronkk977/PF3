@@ -13,6 +13,10 @@ import {
   YAxis,
 } from "recharts";
 import { useChartTheme } from "@/hooks/use-chart-theme";
+import {
+  isHitAreaEntry,
+  useLineHoverEmphasis,
+} from "@/hooks/use-line-hover-emphasis";
 import { ENTIRE_PORTFOLIO_DATA_KEY } from "@/lib/chart-constants";
 import { applyThemeToChartLines } from "@/lib/chart-palette";
 import type { CashFlowEvent } from "@/lib/portfolio-history";
@@ -319,6 +323,7 @@ function MultiLineTooltip({
   active?: boolean;
   payload?: {
     dataKey?: string;
+    name?: string;
     value?: number;
     color?: string;
     payload?: ChartRow;
@@ -340,7 +345,8 @@ function MultiLineTooltip({
       (p) =>
         p.dataKey &&
         p.dataKey !== "deposit" &&
-        p.dataKey !== "withdrawal",
+        p.dataKey !== "withdrawal" &&
+        !isHitAreaEntry(p),
     )
     .map((p) => {
       const cfg = lineByKey.get(String(p.dataKey));
@@ -433,6 +439,7 @@ export function ValueTrendChart({
 }) {
   const [mounted, setMounted] = useState(false);
   const chartTheme = useChartTheme();
+  const { hitAreaProps, emphasisFor, withHoveredLast } = useLineHoverEmphasis();
   const themedLines = useMemo(
     () => applyThemeToChartLines(lines, chartTheme),
     [lines, chartTheme],
@@ -550,25 +557,42 @@ export function ValueTrendChart({
                 <span style={{ color: "var(--color-foreground)" }}>{value}</span>
               )}
             />
+            {/* 透明粗線：只負責接滑鼠事件，畫在可見折線底下 */}
             {themedLines.map((line) => (
               <Line
-                key={line.dataKey}
+                key={`hit-${line.dataKey}`}
                 xAxisId="date"
                 yAxisId="value"
                 type={curveType}
                 dataKey={line.dataKey}
-                name={line.label}
-                stroke={line.color}
-                strokeWidth={
-                  line.dataKey === ENTIRE_PORTFOLIO_DATA_KEY ? 3 : 2
-                }
-                strokeDasharray={line.kind === "entire" ? "6 3" : undefined}
-                dot={chartRows.length <= 31}
-                activeDot={{ r: 4 }}
                 connectNulls={line.kind !== "entire"}
-                isAnimationActive={false}
+                {...hitAreaProps(line.dataKey)}
               />
             ))}
+            {withHoveredLast(themedLines).map((line) => {
+              const baseWidth =
+                line.dataKey === ENTIRE_PORTFOLIO_DATA_KEY ? 3 : 2;
+              const emphasis = emphasisFor(line.dataKey, baseWidth, line.color);
+              return (
+                <Line
+                  key={line.dataKey}
+                  xAxisId="date"
+                  yAxisId="value"
+                  type={curveType}
+                  dataKey={line.dataKey}
+                  name={line.label}
+                  stroke={line.color}
+                  strokeWidth={emphasis.strokeWidth}
+                  strokeOpacity={emphasis.strokeOpacity}
+                  style={emphasis.style}
+                  strokeDasharray={line.kind === "entire" ? "6 3" : undefined}
+                  dot={chartRows.length <= 31}
+                  activeDot={{ r: 4, style: { pointerEvents: "none" } }}
+                  connectNulls={line.kind !== "entire"}
+                  isAnimationActive={false}
+                />
+              );
+            })}
             {hasCashFlows && (
               <Customized
                 component={(rawProps: unknown) => {

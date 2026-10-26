@@ -13,15 +13,16 @@ import {
 import {
   buildPortfolioValueCacheKey,
   getPortfolioValueCache,
+  getTransactionChangesSince,
   getTransactionMeta,
   setPortfolioValueCache,
   type PortfolioValueCachePayload,
+  type TransactionMeta,
 } from "@/lib/portfolio-value-cache";
 import {
   calendarDateKeys,
   forwardFillPrices,
   mapFromRecord,
-  nextDateKey,
   simulateValueDays,
   trimAnomalousLeadingPoint,
   type SeriesContext,
@@ -89,10 +90,16 @@ async function loadPriceMaps(
   periodStart: Date,
   periodEnd: Date,
   seeds?: Record<string, number>,
-): Promise<Map<string, Map<string, number>>> {
+): Promise<{
+  priceBySymbol: Map<string, Map<string, number>>;
+  /** 今天有真實 K 線的標的（見 simulateValueDays 的說明） */
+  todayBarSymbols: Set<string>;
+}> {
   const priceBySymbol = new Map<string, Map<string, number>>();
-  if (symbols.length === 0) return priceBySymbol;
+  const todayBarSymbols = new Set<string>();
+  if (symbols.length === 0) return { priceBySymbol, todayBarSymbols };
 
+  const todayKey = toLocalDateKey(new Date());
   await mapWithConcurrency(symbols, externalReadLimiter, async (symbol) => {
     const bars = await getHistoricalPrices(
       symbol,
@@ -106,8 +113,11 @@ async function loadPriceMaps(
       seeds?.[symbol],
     );
     priceBySymbol.set(symbol, filled);
+    if (bars.some((b) => b.date === todayKey && b.close > 0)) {
+      todayBarSymbols.add(symbol);
+    }
   });
-  return priceBySymbol;
+  return { priceBySymbol, todayBarSymbols };
 }
 
 async function buildFullPortfolioValueSeries(
@@ -126,7 +136,11 @@ async function buildFullPortfolioValueSeries(
     ),
   ];
 
-  const priceBySymbol = await loadPriceMaps(symbols, periodStart, periodEnd);
+  const { priceBySymbol, todayBarSymbols } = await loadPriceMaps(
+    symbols,
+    periodStart,
+    periodEnd,
+  );
   const dateKeys = calendarDateKeys(periodStart, periodEnd);
   const { points, endState } = await simulateValueDays(
     ctx,
@@ -137,7 +151,7 @@ async function buildFullPortfolioValueSeries(
       cashByAccount: new Map(),
     },
     priceBySymbol,
-    { fetchLiveQuotes: getQuotes },
+    { fetchLiveQuotes: getQuotes, todayBarSymbols },
   );
 
   const trimmed = trimAnomalousLeadingPoint(points);
@@ -149,14 +163,12 @@ async function buildFullPortfolioValueSeries(
   return {
     points: trimmed,
     cashFlows,
-    endState: {
-      ...endState,
-      date: trimmed.length > 0 ? trimmed[trimmed.length - 1]!.date : endState.date,
-    },
+    endState,
     periodStart: periodStartStr,
     periodEnd: periodEndStr,
     txCount: meta.txCount,
     maxTxDate: meta.maxTxDate,
+    maxUpdatedAt: meta.maxUpdatedAt,
   };
 }
 
@@ -169,7 +181,15 @@ async function extendPortfolioValueSeries(
   const ctx = await loadSeriesContext(periodEnd, options?.accountIds);
   if (!ctx) return null;
 
-  const extendFromKey = nextDateKey(cached.endState.date);
+  // 一律從快取的最後一天本身（而不是隔天）重跑。每次計算都跑到「今天」，
+  // 所以快取最後一天的點很可能是用盤中價算的：若那天還是今天，要讓它跟著
+  // 盤中報價更新；若已經過了那天，要讓它換成正式收盤價——否則那個點會永遠
+  // 停在上次開 app 當下的盤中價。
+  //
+  // 重跑這天不會讓交易被重複計入：endState 是這天結束時的狀態，
+  // simulateValueDays 消費交易的 while 迴圈從傳入的 txIdx 續跑，這天的交易
+  // 早就被消費掉了；持倉也就是這天收盤後的持倉，跟當初算這天時一致。
+  const extendFromKey = cached.endState.date;
   const periodEndStr = toLocalDateKey(periodEnd);
   if (extendFromKey > periodEndStr) {
     return cached;
@@ -182,7 +202,7 @@ async function extendPortfolioValueSeries(
     (s) => (cached.endState.positions[s] ?? 0) > 0,
   );
 
-  const priceBySymbol = await loadPriceMaps(
+  const { priceBySymbol, todayBarSymbols } = await loadPriceMaps(
     heldSymbols,
     extendFrom,
     periodEnd,
@@ -199,9 +219,11 @@ async function extendPortfolioValueSeries(
       cashByAccount: mapFromRecord(cached.endState.cashByAccount),
     },
     priceBySymbol,
-    { fetchLiveQuotes: getQuotes },
+    { fetchLiveQuotes: getQuotes, todayBarSymbols },
   );
 
+  // 重跑的起點那天快取裡可能已經有點，丟掉舊的換成新算的；新算出來那天若
+  // 被跳過（total<=0），就保留原本的點。
   const mergedPoints = [...cached.points];
   for (const p of newPoints) {
     const last = mergedPoints[mergedPoints.length - 1];
@@ -229,22 +251,44 @@ async function extendPortfolioValueSeries(
     periodEnd: periodEndStr,
     txCount: meta.txCount,
     maxTxDate: meta.maxTxDate,
+    maxUpdatedAt: meta.maxUpdatedAt,
   };
 }
 
-function canIncrementalFromCache(
+async function canIncrementalFromCache(
   cached: PortfolioValueCachePayload,
-  meta: { txCount: number; maxTxDate: string },
+  meta: TransactionMeta,
   periodStartStr: string,
-): boolean {
+): Promise<boolean> {
   if (cached.periodStart !== periodStartStr) return false;
-  if (meta.txCount === cached.txCount && meta.maxTxDate === cached.maxTxDate) {
-    return cached.periodEnd < toLocalDateKey(new Date());
+  // 舊版快取沒記 maxUpdatedAt，無從判斷有沒有交易被原地編輯過，直接重算
+  if (cached.maxUpdatedAt === undefined) return false;
+  if (isSameTransactionData(cached, meta)) {
+    // 用 <= 而非 <：快取尾端等於今天時也要走增量路徑，才能讓
+    // extendPortfolioValueSeries 有機會重跑快取最後一天、跟上盤中報價或收盤價
+    // （見那邊的說明）。這裡本身不打任何外部 API，實際節流交給
+    // getHistoricalPrices 自己的 15 分鐘快取 TTL。
+    return cached.periodEnd <= toLocalDateKey(new Date());
   }
-  if (meta.txCount > cached.txCount) {
-    return meta.maxTxDate >= cached.endState.date;
-  }
-  return false;
+  if (meta.txCount <= cached.txCount) return false;
+  // 筆數變多不代表只有新增：同時有舊交易被改過的話，已算好的點就錯了。
+  // 新增的交易也要每一筆都不早於快取尾端，增量延伸才納入得到。
+  const changes = await getTransactionChangesSince(cached.maxUpdatedAt);
+  if (changes.editedCount > 0) return false;
+  return changes.addedDates.every(
+    (d) => toLocalDateKey(d) >= cached.endState.date,
+  );
+}
+
+function isSameTransactionData(
+  cached: PortfolioValueCachePayload,
+  meta: TransactionMeta,
+): boolean {
+  return (
+    meta.txCount === cached.txCount &&
+    meta.maxTxDate === cached.maxTxDate &&
+    meta.maxUpdatedAt === cached.maxUpdatedAt
+  );
 }
 
 export async function resolvePortfolioValueSeries(
@@ -266,7 +310,7 @@ export async function resolvePortfolioValueSeries(
 
   if (!options?.force) {
     const cached = await getPortfolioValueCache(cacheKey);
-    if (cached && canIncrementalFromCache(cached, meta, periodStartStr)) {
+    if (cached && (await canIncrementalFromCache(cached, meta, periodStartStr))) {
       const extended = await extendPortfolioValueSeries(
         cached,
         periodStart,
@@ -292,8 +336,7 @@ export async function resolvePortfolioValueSeries(
     if (
       cached &&
       cached.periodStart === periodStartStr &&
-      meta.txCount === cached.txCount &&
-      meta.maxTxDate === cached.maxTxDate &&
+      isSameTransactionData(cached, meta) &&
       cached.periodEnd >= toLocalDateKey(periodEnd)
     ) {
       return {

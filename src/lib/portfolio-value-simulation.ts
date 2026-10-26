@@ -139,11 +139,14 @@ export function forwardFillPrices(
   const beforeStart = bars
     .filter((b) => b.date < periodStartKey && b.close > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
+  // 起點前的真實 K 線優先，seed 只在回溯區間完全抓不到價時才用：seed 來自
+  // 快取 endState.lastPriceBySymbol，很可能是上一次跑在盤中時記下的即時價，
+  // 讓它蓋過已經收盤的正式 close，會把盤中價一路往後前向填充。
   let lastPrice: number | null =
-    seedPrice !== undefined && seedPrice > 0
-      ? seedPrice
-      : beforeStart.length > 0
-        ? beforeStart[beforeStart.length - 1]!.close
+    beforeStart.length > 0
+      ? beforeStart[beforeStart.length - 1]!.close
+      : seedPrice !== undefined && seedPrice > 0
+        ? seedPrice
         : null;
 
   while (cursor <= end) {
@@ -196,9 +199,15 @@ export function nextDateKey(dateStr: string): string {
  * 1. 當天持股「部分」缺價時不整天跳過——只有「全部」持股都缺價且現金也是 0
  *    才跳過。舊版本一度改成「只要有一檔缺價就跳過整天」，會讓走勢圖中段
  *    無故消失一大截。
- * 2. 只有「今天」這個資料點缺價時才會去打即時報價補洞（歷史日期缺價就是
- *    真的缺價，不該為了補歷史資料狂打報價 API）；同一天內多檔標的都缺價，
- *    只會批次打一次，不會每個標的各打一次。
+ * 2. 只有「今天」這個資料點才會去打即時報價（歷史日期缺價就是真的缺價，
+ *    不該為了補歷史資料狂打報價 API）；同一天內多檔標的都要報價，只會批次
+ *    打一次，不會每個標的各打一次。
+ *
+ * 今天的價格判斷：priceBySymbol 是前向填充過的，今天就算 Yahoo 還沒給
+ * 今天那根 K 線（盤前、假日，或盤中回 close:null），也會被填上前一天的
+ * close——光看「有沒有價格」分不出來。所以另外由 todayBarSymbols 標出
+ * 「今天真的有 K 線」的標的：有就用 K 線；沒有就打即時報價；報價失敗或
+ * 為 0 再退回前向填充的價格，不讓今天整檔變成 0。
  */
 export async function simulateValueDays(
   ctx: SeriesContext,
@@ -209,7 +218,12 @@ export async function simulateValueDays(
     cashByAccount: Map<string, number>;
   },
   priceBySymbol: Map<string, Map<string, number>>,
-  deps?: { fetchLiveQuotes?: LiveQuoteFetcher; today?: string },
+  deps?: {
+    fetchLiveQuotes?: LiveQuoteFetcher;
+    today?: string;
+    /** 今天有真實 K 線（非前向填充）的標的；未提供時視為都沒有 */
+    todayBarSymbols?: Set<string>;
+  },
 ): Promise<{
   points: { date: string; value: number }[];
   endState: PortfolioValueEndState;
@@ -245,7 +259,11 @@ export async function simulateValueDays(
 
     for (const [symbol, qty] of held) {
       let price = priceBySymbol.get(symbol)?.get(dateStr);
-      if ((price === undefined || price <= 0) && dateStr === todayKey && deps?.fetchLiveQuotes) {
+      if (
+        dateStr === todayKey &&
+        deps?.fetchLiveQuotes &&
+        !deps.todayBarSymbols?.has(symbol)
+      ) {
         if (!liveQuotesCache) {
           liveQuotesCache = await deps.fetchLiveQuotes([...positions.keys()]);
         }
@@ -269,13 +287,16 @@ export async function simulateValueDays(
     points.push({ date: dateStr, value: total });
   }
 
+  // endState 的持倉／現金／txIdx 是「最後一個模擬日」結束時的狀態，date 必須
+  // 對上同一天——不能用最後一個有點的日期：尾端若有幾天 total<=0 被跳過，
+  // 兩者會錯開，增量續算時就會拿較晚的持倉去重算較早的日子。
   const lastDate =
-    dateKeys.length > 0 ? dateKeys[dateKeys.length - 1]! : initial.txIdx.toString();
+    dateKeys.length > 0 ? dateKeys[dateKeys.length - 1]! : "";
 
   return {
     points,
     endState: {
-      date: points.length > 0 ? points[points.length - 1]!.date : lastDate,
+      date: lastDate,
       txIdx,
       positions: recordFromMap(positions),
       cashByAccount: recordFromMap(cashByAccount),

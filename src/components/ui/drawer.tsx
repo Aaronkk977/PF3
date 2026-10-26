@@ -15,7 +15,7 @@ function clampWidth(width: number): number {
 
 const EXIT_DURATION_MS = 300;
 
-/** 從右側滑入的側邊抽屜：右緣與下緣都跟視窗邊緣貼齊，只有左上留一點邊界（圓角在左上角），
+/** 從右側滑入的側邊抽屜：右緣貼齊視窗邊緣，上／下／左留一點邊界（圓角在左上角），
  *  左側邊框可拖曳調整寬度 */
 export function Drawer({
   left,
@@ -89,7 +89,7 @@ export function Drawer({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex justify-end bg-black/60 pt-[7vh] pl-4"
+      className="fixed inset-0 z-[100] flex justify-end bg-black/60 pt-[7vh] pb-4 pl-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) requestClose();
       }}

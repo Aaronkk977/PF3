@@ -3,20 +3,26 @@ const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const { fork } = require("child_process");
 const { runMigrations } = require("./migrate");
 
-const PORT = 3847;
 const HOSTNAME = "127.0.0.1";
-const BASE_URL = `http://${HOSTNAME}:${PORT}`;
 // 涵蓋「等 server process 活著」+「等開機維護（股票分割偵測＋幣別／
 // 追蹤清單名稱校正）跑完」兩段，維護第一次跑（或冷卻到期後）可能要等
 // 外部 API，時間拉長一點比較保險。
 const HEALTH_TIMEOUT_MS = 120_000;
 
+// 打包後 Windows 的工作列／視窗圖示是吃 exe 本身內嵌的那份（由
+// electron-builder 從 assets/icon.png 轉出來），這裡指定的是給開發模式用的，
+// 不然 npm run electron 會顯示 Electron 預設的原子圖示。
+const APP_ICON = path.join(__dirname, "icon.png");
+
 let serverProcess = null;
 let mainWindow = null;
 let splashWindow = null;
+let baseUrl = "";
+let serverLogs = "";
 
 // 對齊既有 launcher/start.ps1 使用的 %APPDATA%\PortfolioPerformance，
 // 不依賴 Electron 預設 userData 命名，確保沿用舊版使用者的既有資料。
@@ -33,17 +39,78 @@ function getResourcesRoot() {
     : path.join(__dirname, "..");
 }
 
+// 前端設定（主題、漲跌配色等）存在 localStorage，而 localStorage 是依
+// origin（含埠號）分開存的；每次開啟都換隨機埠就等於每次都是新的儲存區，
+// 設定會「跑掉」。所以優先固定用這個埠，被佔用時才退回隨機埠。
+const PREFERRED_PORT = 38517;
+
+async function pickFreePort() {
+  try {
+    return await probePort(PREFERRED_PORT);
+  } catch {
+    return probePort(0);
+  }
+}
+
+function probePort(requestedPort) {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(requestedPort, HOSTNAME, () => {
+      const addr = probe.address();
+      const port = addr && typeof addr === "object" ? addr.port : 0;
+      probe.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (!port) {
+          reject(new Error("無法配置本機埠"));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
 function waitForServer(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      serverProcess?.off("exit", onExit);
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const onExit = (code) => {
+      const tail = serverLogs.trim().slice(-800);
+      finish(
+        new Error(
+          `本機伺服器無法啟動（code ${code}）${tail ? `\n${tail}` : ""}`,
+        ),
+      );
+    };
+
+    serverProcess?.once("exit", onExit);
+
     function attempt() {
+      if (settled) return;
       const req = http.get(url, (res) => {
         res.resume();
-        resolve();
+        finish();
       });
       req.on("error", () => {
+        if (settled) return;
         if (Date.now() > deadline) {
-          reject(new Error(`Server did not respond within ${timeoutMs}ms at ${url}`));
+          finish(
+            new Error(`Server did not respond within ${timeoutMs}ms at ${url}`),
+          );
           return;
         }
         setTimeout(attempt, 400);
@@ -80,8 +147,13 @@ function startNextServer(env) {
     stdio: "pipe",
   });
 
-  serverProcess.stdout?.on("data", (d) => process.stdout.write(`[server] ${d}`));
-  serverProcess.stderr?.on("data", (d) => process.stderr.write(`[server] ${d}`));
+  const capture = (d) => {
+    const text = String(d);
+    serverLogs = (serverLogs + text).slice(-4000);
+    process.stdout.write(`[server] ${text}`);
+  };
+  serverProcess.stdout?.on("data", capture);
+  serverProcess.stderr?.on("data", capture);
   serverProcess.on("exit", (code) => {
     if (code !== 0 && mainWindow) {
       dialog.showErrorBox("伺服器已停止", `本機伺服器意外結束（code ${code}）`);
@@ -97,6 +169,7 @@ function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 420,
     height: 260,
+    icon: APP_ICON,
     frame: false,
     resizable: false,
     movable: true,
@@ -111,7 +184,7 @@ function createSplashWindow() {
     },
   });
   splashWindow.loadFile(path.join(__dirname, "splash.html"), {
-    search: `base=${encodeURIComponent(BASE_URL)}`,
+    search: `base=${encodeURIComponent(baseUrl)}`,
   });
   splashWindow.once("ready-to-show", () => splashWindow?.show());
   splashWindow.on("closed", () => {
@@ -132,6 +205,7 @@ function createWindow() {
     height: 860,
     show: false,
     autoHideMenuBar: true,
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -163,11 +237,11 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadURL(BASE_URL);
+  mainWindow.loadURL(baseUrl);
 
   // 外部連結一律用系統瀏覽器開啟，視窗內只顯示本機 App
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(BASE_URL)) {
+    if (!url.startsWith(baseUrl)) {
       shell.openExternal(url);
       return { action: "deny" };
     }
@@ -185,13 +259,15 @@ async function bootstrap() {
   fs.mkdirSync(dataDir, { recursive: true });
 
   const dbFile = path.join(dataDir, "portfolio.db").replace(/\\/g, "/");
+  const port = await pickFreePort();
+  baseUrl = `http://${HOSTNAME}:${port}`;
   const env = {
     ...process.env,
     NODE_ENV: "production",
     APP_RUNTIME: "desktop",
     APP_DATA_DIR: userDataDir,
     DATABASE_URL: `file:${dbFile}?socket_timeout=60`,
-    PORT: String(PORT),
+    PORT: String(port),
     HOSTNAME,
   };
 
@@ -199,8 +275,8 @@ async function bootstrap() {
 
   applyPendingMigrations(path.join(dataDir, "portfolio.db"));
   startNextServer(env);
-  await waitForServer(BASE_URL, HEALTH_TIMEOUT_MS);
-  await waitForServer(`${BASE_URL}/api/startup/status`, HEALTH_TIMEOUT_MS);
+  await waitForServer(baseUrl, HEALTH_TIMEOUT_MS);
+  await waitForServer(`${baseUrl}/api/startup/status`, HEALTH_TIMEOUT_MS);
   createWindow();
 }
 
@@ -211,7 +287,26 @@ function stopServer() {
   }
 }
 
+// 只允許一個實例：第二次開啟時，38517 已被第一個實例佔用，會退回隨機埠
+// （localStorage 設定跟著不見），還會多起一個 server 同時寫同一個 SQLite。
+// 所以第二個實例直接結束，改把既有視窗叫到前面。
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // 還在啟動中就只有 splash，先顯示它
+    const win = mainWindow ?? splashWindow;
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   try {
     await bootstrap();
     if (app.isPackaged) {

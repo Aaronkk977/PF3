@@ -94,6 +94,7 @@ async function runPerformanceRequest(request: NextRequest) {
     accountIds: accountIds.length > 0 ? accountIds : undefined,
     benchmarkSymbols:
       benchmarkSymbols.length > 0 ? benchmarkSymbols : undefined,
+    force,
   };
 
   if (stream) {

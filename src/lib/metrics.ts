@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { consumeFifoLots, type FifoLot } from "@/lib/fifo-lots";
 import { toBaseCurrency } from "@/lib/fx";
 import { toNumber } from "@/lib/utils";
 
@@ -353,10 +354,7 @@ export async function computeTradingMetrics(
   let closed = 0;
   const holdingPeriods: number[] = [];
 
-  const lotsByInstrument = new Map<
-    string,
-    { qty: number; cost: number; date: Date }[]
-  >();
+  const lotsByInstrument = new Map<string, (FifoLot & { buyDate: Date })[]>();
 
   for (const tx of replayTxs) {
     if (!tx.instrumentId) continue;
@@ -385,27 +383,20 @@ export async function computeTradingMetrics(
     if (tx.type === "BUY") {
       lots.push({
         qty,
-        cost: amount + fee + tax,
-        date: tx.date,
+        costBase: amount + fee + tax,
+        buyDate: tx.date,
       });
     } else if (tx.type === "SELL" && qty > 0) {
-      let remaining = qty;
-      let sellCost = 0;
-      let weightedHoldingDays = 0;
-      let matchedQty = 0;
-
-      while (remaining > 0 && lots.length > 0) {
-        const lot = lots[0]!;
-        const used = Math.min(remaining, lot.qty);
-        const sliceCost = (lot.cost / lot.qty) * used;
-        sellCost += sliceCost;
-        lot.cost -= sliceCost;
-        weightedHoldingDays += used * holdingDaysBetween(lot.date, tx.date);
-        matchedQty += used;
-        lot.qty -= used;
-        remaining -= used;
-        if (lot.qty <= 0.0000001) lots.shift();
-      }
+      const {
+        matchedQty,
+        matchedCostBase: sellCost,
+        slices,
+      } = consumeFifoLots(lots, qty);
+      const weightedHoldingDays = slices.reduce(
+        (s, slice) =>
+          s + slice.qty * holdingDaysBetween(slice.buyDate!, tx.date),
+        0,
+      );
 
       if (inPeriod && matchedQty > 0) {
         const proceeds = amount - fee - tax;

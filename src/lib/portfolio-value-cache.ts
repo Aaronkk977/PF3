@@ -17,6 +17,15 @@ export type PortfolioValueCachePayload = {
   periodEnd: string;
   txCount: number;
   maxTxDate: string;
+  /** 算這份快取當下所有交易的 max(updatedAt)（ISO）。舊版快取沒有這欄，
+   *  一律視為過期重算一次。 */
+  maxUpdatedAt?: string;
+};
+
+export type TransactionMeta = {
+  txCount: number;
+  maxTxDate: string;
+  maxUpdatedAt: string;
 };
 
 export function buildPortfolioValueCacheKey(
@@ -32,18 +41,40 @@ export function buildPortfolioValueCacheKey(
   return `value|start:${periodStart}|acc:${acc}`;
 }
 
-export async function getTransactionMeta(): Promise<{
-  txCount: number;
-  maxTxDate: string;
-}> {
-  const [txCount, agg] = await Promise.all([
-    prisma.transaction.count(),
-    prisma.transaction.aggregate({ _max: { date: true } }),
-  ]);
+export async function getTransactionMeta(): Promise<TransactionMeta> {
+  const agg = await prisma.transaction.aggregate({
+    _count: true,
+    _max: { date: true, updatedAt: true },
+  });
   const maxTxDate = agg._max.date
     ? agg._max.date.toISOString().slice(0, 10)
     : "";
-  return { txCount, maxTxDate };
+  return {
+    txCount: agg._count,
+    maxTxDate,
+    maxUpdatedAt: agg._max.updatedAt?.toISOString() ?? "",
+  };
+}
+
+/** 從 since 之後有變動的交易：拆成「既有交易被原地編輯」跟「新增的交易」。
+ *  前者不管日期都會讓已算好的市值序列失準；後者只要日期不早於快取尾端，
+ *  增量延伸就能正確納入。 */
+export async function getTransactionChangesSince(since: string): Promise<{
+  editedCount: number;
+  addedDates: Date[];
+}> {
+  const sinceDate = new Date(since);
+  const rows = await prisma.transaction.findMany({
+    where: { updatedAt: { gt: sinceDate } },
+    select: { date: true, createdAt: true },
+  });
+  let editedCount = 0;
+  const addedDates: Date[] = [];
+  for (const r of rows) {
+    if (r.createdAt > sinceDate) addedDates.push(r.date);
+    else editedCount++;
+  }
+  return { editedCount, addedDates };
 }
 
 export async function getPortfolioValueCache(
@@ -66,7 +97,7 @@ export async function setPortfolioValueCache(
   cacheKey: string,
   periodStart: string,
   periodEnd: string,
-  meta: { txCount: number; maxTxDate: string },
+  meta: TransactionMeta,
   payload: PortfolioValueCachePayload,
 ): Promise<void> {
   const body = JSON.stringify(payload);
