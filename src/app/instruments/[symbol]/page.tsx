@@ -24,6 +24,7 @@ import {
   DEPRECATED_TAG_NAMES,
   withoutDeprecatedTags,
 } from "@/lib/deprecated-tags";
+import { isCustomSeriesSymbol } from "@/lib/custom-series-symbols";
 import { toTransactionDateKey } from "@/lib/date-keys";
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { decodeSymbol, toNumber } from "@/lib/utils";
@@ -165,7 +166,7 @@ export default async function InstrumentPage({
     instrumentCurrency,
   );
 
-  const isVix = symbol.toUpperCase() === "VIXTWN";
+  const isLineSeries = isCustomSeriesSymbol(symbol);
 
   return (
     <Suspense fallback={<div className="text-sm text-[var(--color-muted)]">載入中…</div>}>
@@ -192,7 +193,7 @@ export default async function InstrumentPage({
       transactionHistory={transactionHistory}
       accounts={accounts}
       pnlSummary={pnlSummary}
-      chartType={isVix ? "line" : "candlestick"}
+      chartType={isLineSeries ? "line" : "candlestick"}
       relatedNotes={relatedNotes}
     />
     </Suspense>

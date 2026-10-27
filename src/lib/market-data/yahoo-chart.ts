@@ -3,7 +3,9 @@ import "server-only";
 import YahooFinance from "yahoo-finance2";
 import { toLocalDateKey } from "@/lib/date-keys";
 import { fetchWithShortTimeout } from "@/lib/http-fetch";
-import { isCryptoSymbol } from "@/lib/market-utils";
+import { isCryptoSymbol, resolveYahooQuoteSymbol } from "@/lib/market-utils";
+
+export { resolveYahooQuoteSymbol };
 
 /** Yahoo Finance 的 HTTP 存取：chart 端點（不需要 crumb）與 yahoo-finance2 的
  *  .quote()。只負責抓資料跟解析，不碰資料庫；快取讀寫在 price-cache.ts。 */
@@ -12,7 +14,7 @@ const yahooFinance = new YahooFinance();
 
 /** 網路不穩時快速失敗，改走 DB 快取 */
 const YAHOO_FETCH_TIMEOUT_MS = 6_000;
-export const TAIWAN_VIX_SYMBOL = "VIXTWN";
+export { TAIWAN_VIX_SYMBOL } from "@/lib/custom-series-symbols";
 
 export async function fetchWithTimeout(
   url: string,
@@ -65,16 +67,6 @@ export function normalizeYahooChangePercent(
   return pct / 100;
 }
 
-/** 交易代號 → Yahoo 查價代號（例：AVAX → AVAX-USD） */
-export function resolveYahooQuoteSymbol(symbol: string): string {
-  const s = symbol.trim().toUpperCase();
-  if (s === TAIWAN_VIX_SYMBOL) return TAIWAN_VIX_SYMBOL;
-  if (!s || s.includes("-") || s.endsWith(".TW") || s.endsWith(".TWO")) {
-    return symbol.trim();
-  }
-  if (isCryptoSymbol(s)) return `${s}-USD`;
-  return symbol.trim();
-}
 
 export function inferAssetClass(symbol: string): string {
   if (isCryptoSymbol(symbol)) return "crypto";

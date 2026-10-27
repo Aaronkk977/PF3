@@ -8,6 +8,8 @@ import {
   startOfLocalDay,
   toOhlcBars,
 } from "@/lib/market-data/price-cache";
+import { isTaiwanMarginSymbol } from "@/lib/custom-series-symbols";
+import { syncMarginHistory } from "@/lib/market-data/taiwan-margin";
 import { isTaiwanVixSymbol, syncVixHistory } from "@/lib/market-data/taiwan-vix";
 import { fetchChart, type OhlcBar } from "@/lib/market-data/yahoo-chart";
 
@@ -26,6 +28,9 @@ export async function getHistoricalPrices(
 ): Promise<OhlcBar[]> {
   if (isTaiwanVixSymbol(symbol)) {
     return syncVixHistory(periodStart, periodEnd);
+  }
+  if (isTaiwanMarginSymbol(symbol)) {
+    return syncMarginHistory(symbol.trim().toUpperCase(), periodStart, periodEnd);
   }
 
   const cached = await getCachedHistory(symbol, periodStart, periodEnd);

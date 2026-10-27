@@ -1,209 +1,239 @@
 import "server-only";
 
 import { mapWithConcurrency } from "@/lib/async-pool";
-import { externalReadLimiter } from "@/lib/concurrency-limiter";
+import { dbWriteLimiter, externalReadLimiter } from "@/lib/concurrency-limiter";
 import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import {
+  dateFromKey,
   getCachedBars,
+  getCachedHistory,
+  getDayChangeFromCache,
   persistDailyClose,
-  startOfLocalDay,
+  upsertDailyClose,
 } from "@/lib/market-data/price-cache";
-import {
-  fetchWithTimeout,
-  TAIWAN_VIX_SYMBOL,
-  type OhlcBar,
-  type QuoteResult,
-} from "@/lib/market-data/yahoo-chart";
+import { TAIWAN_VIX_SYMBOL } from "@/lib/custom-series-symbols";
+import { fetchWithShortTimeout } from "@/lib/http-fetch";
+import type { OhlcBar, QuoteResult } from "@/lib/market-data/yahoo-chart";
+import { parseVixDailyFile, parseVixMonthlyFile } from "@/lib/market-series-parsers";
 
-/** 台灣 VIX（VIXTWN）：Yahoo 沒有，即時值抓期交所 MIS，歷史日收盤抓 bq888。 */
+/** 台灣 VIX（VIXTWN）：Yahoo 沒有。即時值抓期交所 MIS；歷史日收盤用
+ *  1. 期交所主站近 3 個月的月檔（一個檔案一整個月，最省請求）
+ *  2. 主站當月的單日分鐘檔（月檔還沒更新到的最近幾天）
+ *  官方收盤值一律是「收盤前 1 分鐘平均指數」。期交所只保留約 3 個月，
+ *  更早的歷史只能靠 PriceCache 自己累積。
+ *
+ *  不要再用 www.bq888.taifex.com.tw：舊版曾從那裡抓歷史，但它的資料是壞的
+ *  （連續數週同一個值、0.51 這種不可能的點數，2026-07-01 與官方月檔差 12 點）。 */
 
+const FETCH_TIMEOUT_MS = 10_000;
+const TAIFEX_BASE = "https://www.taifex.com.tw";
 const TAIWAN_VIX_QUOTE_LIST_URL =
   "https://mis.taifex.com.tw/futures/api/getQuoteListVIX";
-const TAIWAN_VIX_LIST_URL = "https://www.bq888.taifex.com.tw/cht/7/vixMinNew";
+/** 主站月檔只保留最近 3 個月（含當月），多抓一個月當緩衝 */
+const MONTHLY_FILE_MONTHS = 4;
+/** 最近幾天的單日檔每次都重抓，蓋掉盤中存下來的即時快照 */
+const RECENT_DAYS_REFRESH = 7;
 
 export function isTaiwanVixSymbol(symbol: string): boolean {
   return symbol.trim().toUpperCase() === TAIWAN_VIX_SYMBOL;
 }
 
-function parseLatestVixValue(rawText: string): number | null {
-  const lines = rawText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const match = lines[i]?.match(/(\d+(?:\.\d+)?)\s*$/);
-    if (!match) continue;
-    const value = Number(match[1]);
-    if (Number.isFinite(value) && value > 0) return value;
-  }
-  return null;
-}
+const compactKey = (d: Date) => toLocalDateKey(d).replace(/-/g, "");
 
-async function fetchTaiwanVixDailyClose(dateKey: string): Promise<number | null> {
-  const url = `https://www.bq888.taifex.com.tw/cht/7/getVixData?filesname=${encodeURIComponent(dateKey)}`;
-  const res = await fetchWithTimeout(url, { next: { revalidate: 30 } });
+async function fetchText(url: string, revalidate: number): Promise<string | null> {
+  const res = await fetchWithShortTimeout(url, { next: { revalidate } }, FETCH_TIMEOUT_MS);
   if (!res?.ok) return null;
-  const text = await res.text();
-  return parseLatestVixValue(text);
+  return res.text();
 }
 
-/** 取得 bq888 上所有可用的 VIXTWN 日期清單（YYYYMMDD 格式，降冪排列） */
-async function fetchTaiwanVixAvailableDates(): Promise<string[]> {
-  const listRes = await fetchWithTimeout(TAIWAN_VIX_LIST_URL, {
-    next: { revalidate: 3600 },
-  });
-  if (!listRes?.ok) return [];
-  const html = await listRes.text();
-  return Array.from(
-    new Set(
-      Array.from(html.matchAll(/getVixData\?filesname=(\d{8})/g)).map(
-        (m) => m[1]!,
-      ),
-    ),
+async function fetchMonthlyCloses(yyyymm: string): Promise<Map<string, number> | null> {
+  const text = await fetchText(
+    `${TAIFEX_BASE}/file/taifex/Dailydownload/vix/log2data/${yyyymm}new.txt`,
+    3600,
   );
+  if (!text) return null;
+  const closes = parseVixMonthlyFile(text);
+  return closes.size > 0 ? closes : null;
+}
+
+async function fetchDailyClose(dateKey: string): Promise<number | null> {
+  const text = await fetchText(
+    `${TAIFEX_BASE}/cht/7/getVixData?filesname=${encodeURIComponent(dateKey)}`,
+    600,
+  );
+  return text ? parseVixDailyFile(text) : null;
+}
+
+/** 主站「分鐘檔」頁面列出的日期（當月，YYYYMMDD，降冪） */
+async function fetchDailyFileDates(): Promise<string[]> {
+  const html = await fetchText(`${TAIFEX_BASE}/cht/7/vixMinNew`, 3600);
+  if (!html) return [];
+  const dates = new Set(
+    Array.from(html.matchAll(/getVixData\?filesname=(\d{8})/g), (m) => m[1]!),
+  );
+  return [...dates].sort().reverse();
+}
+
+function monthsBetween(start: Date, end: Date): string[] {
+  const out: string[] = [];
+  const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cursor <= end) {
+    out.push(`${cursor.getFullYear()}${String(cursor.getMonth() + 1).padStart(2, "0")}`);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return out;
 }
 
 /**
- * 抓取 VIXTWN 歷史日收盤並寫入 PriceCache。
- * 只抓 DB 中尚缺少的日期，並行數限制為 8。
+ * 抓 VIXTWN 官方日收盤寫入 PriceCache，並回傳區間內的日線。
+ * 與資料庫不同的值會被官方值覆蓋（盤中快照、舊版程式存錯日期的值）；
+ * 月檔完整涵蓋的月份裡、官方沒有的日期（週末、假日的錯誤列）會被刪掉。
  */
 export async function syncVixHistory(
   periodStart: Date,
   periodEnd: Date,
 ): Promise<OhlcBar[]> {
-  const startKey = toLocalDateKey(periodStart).replace(/-/g, "");
-  const endKey = toLocalDateKey(periodEnd).replace(/-/g, "");
+  const startKey = compactKey(periodStart);
+  const endKey = compactKey(periodEnd);
+  const inRange = (k: string) => k >= startKey && k <= endKey;
 
-  // 先從 DB 取已有的資料
-  const existing = await prisma.priceCache.findMany({
-    where: {
-      symbol: TAIWAN_VIX_SYMBOL,
-      date: { gte: startOfLocalDay(periodStart), lte: startOfLocalDay(periodEnd) },
-    },
-    orderBy: { date: "asc" },
+  const existing = new Map(
+    (await getCachedHistory(TAIWAN_VIX_SYMBOL, periodStart, periodEnd)).map(
+      (r) => [compactKey(r.date), r.close] as const,
+    ),
+  );
+  const official = new Map<string, number>();
+  /** 月檔成功取得的月份 → 該月檔最後一個交易日 */
+  const coveredMonths = new Map<string, string>();
+
+  const monthlyFrom = new Date();
+  monthlyFrom.setMonth(monthlyFrom.getMonth() - (MONTHLY_FILE_MONTHS - 1));
+  const months = monthsBetween(
+    periodStart > monthlyFrom ? periodStart : monthlyFrom,
+    periodEnd,
+  );
+  await mapWithConcurrency(months, externalReadLimiter, async (yyyymm) => {
+    const closes = await fetchMonthlyCloses(yyyymm);
+    if (!closes) return;
+    coveredMonths.set(yyyymm, [...closes.keys()].sort().at(-1)!);
+    for (const [k, v] of closes) if (inRange(k)) official.set(k, v);
   });
 
-  const existingKeys = new Set(
-    existing.map((r) => toLocalDateKey(r.date).replace(/-/g, "")),
-  );
+  const recentKey = compactKey(new Date(Date.now() - RECENT_DAYS_REFRESH * 86_400_000));
+  const needsDailyFile = (k: string) =>
+    inRange(k) && !official.has(k) && (!existing.has(k) || k >= recentKey);
 
-  // 取 bq888 可用日期，篩出範圍內且 DB 缺少的
-  const allDates = await fetchTaiwanVixAvailableDates();
-  const missing = allDates.filter(
-    (d) => d >= startKey && d <= endKey && !existingKeys.has(d),
-  );
-
-  // 並行抓取，共用全域對外讀取上限
-  await mapWithConcurrency(missing, externalReadLimiter, async (dateKey) => {
-    const value = await fetchTaiwanVixDailyClose(dateKey);
-    if (value != null && value > 0) {
-      persistDailyClose(TAIWAN_VIX_SYMBOL, dateKey, value);
-    }
+  const dailyDates = (await fetchDailyFileDates()).filter(needsDailyFile);
+  await mapWithConcurrency(dailyDates, externalReadLimiter, async (k) => {
+    const value = await fetchDailyClose(k);
+    if (value != null) official.set(k, value);
   });
 
-  // 重新從 DB 讀取（含剛寫入的）
+  const toWrite = [...official].filter(([k, v]) => {
+    const cached = existing.get(k);
+    return cached == null || Math.abs(cached - v) > 0.005;
+  });
+  const toDelete = [...existing.keys()].filter((k) => {
+    const lastInMonth = coveredMonths.get(k.slice(0, 6));
+    return lastInMonth != null && k <= lastInMonth && !official.has(k);
+  });
+  if (toWrite.length > 0 || toDelete.length > 0) {
+    await dbWriteLimiter.run(async () => {
+      for (const [k, v] of toWrite) await upsertDailyClose(TAIWAN_VIX_SYMBOL, k, v);
+      if (toDelete.length > 0) {
+        await prisma.priceCache.deleteMany({
+          where: {
+            symbol: TAIWAN_VIX_SYMBOL,
+            date: {
+              in: toDelete.map(dateFromKey),
+            },
+          },
+        });
+      }
+    });
+  }
+
   return getCachedBars(TAIWAN_VIX_SYMBOL, periodStart, periodEnd);
 }
 
-export async function fetchTaiwanVixQuote(): Promise<QuoteResult | null> {
-  const liveRes = await fetchWithTimeout(TAIWAN_VIX_QUOTE_LIST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ SortColumn: "", AscDesc: "A" }),
-    next: { revalidate: 15 },
-  });
-  if (liveRes?.ok) {
-    type TaifexVixItem = {
-      SymbolID?: string;
-      DispEName?: string;
-      CLastPrice?: string;
-      CRefPrice?: string;
-      CDiff?: string;
-      CDiffRate?: string;
-    };
-    type TaifexVixResponse = {
-      RtCode?: string;
-      RtData?: { QuoteList?: TaifexVixItem[] };
-    };
-    try {
-      const payload = (await liveRes.json()) as TaifexVixResponse;
-      const list = payload.RtData?.QuoteList ?? [];
-      const item = list.find((row) => row.SymbolID?.toUpperCase() === "TAIWANVIX");
-      if (item?.CLastPrice) {
-        const price = Number(item.CLastPrice.replace(/,/g, ""));
-        if (Number.isFinite(price) && price > 0) {
-          const parseOptionalNumber = (value: string | undefined): number | undefined => {
-            if (!value || !value.trim()) return undefined;
-            const n = Number(value.replace("%", "").replace(/,/g, ""));
-            return Number.isFinite(n) ? n : undefined;
-          };
-          const ref = parseOptionalNumber(item.CRefPrice);
-          const diffRaw = parseOptionalNumber(item.CDiff);
-          const diffRateRaw = parseOptionalNumber(item.CDiffRate);
-          const change =
-            diffRaw !== undefined && Number.isFinite(diffRaw)
-              ? diffRaw
-              : undefined;
-          const changePercent =
-            diffRateRaw !== undefined && Number.isFinite(diffRateRaw)
-              ? diffRateRaw / 100
-              : ref !== undefined && Number.isFinite(ref) && ref > 0
-                ? (price - ref) / ref
-                : undefined;
+type TaifexVixItem = {
+  SymbolID?: string;
+  DispEName?: string;
+  CLastPrice?: string;
+  CRefPrice?: string;
+  CDiff?: string;
+  CDiffRate?: string;
+  CDate?: string;
+};
 
-          const todayKey = toLocalDateKey(new Date()).replace(/-/g, "");
-          persistDailyClose(TAIWAN_VIX_SYMBOL, todayKey, price);
-          return {
-            symbol: TAIWAN_VIX_SYMBOL,
-            name: item.DispEName ?? "TAIWAN VIX",
-            price,
-            currency: "TWD",
-            change,
-            changePercent,
-          };
-        }
-      }
-    } catch {
-      // Fall through to historical file fallback.
-    }
-  }
+function parseOptionalNumber(value: string | undefined): number | undefined {
+  if (!value || !value.trim()) return undefined;
+  const n = Number(value.replace("%", "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : undefined;
+}
 
-  // Fallback source: daily download pages (not realtime).
-  const listRes = await fetchWithTimeout(TAIWAN_VIX_LIST_URL, {
-    next: { revalidate: 30 },
-  });
-  if (!listRes?.ok) return null;
-  const html = await listRes.text();
-
-  const dates = Array.from(
-    new Set(
-      Array.from(html.matchAll(/getVixData\?filesname=(\d{8})/g)).map(
-        (m) => m[1],
-      ),
-    ),
+async function fetchLiveVix(): Promise<QuoteResult | null> {
+  const res = await fetchWithShortTimeout(
+    TAIWAN_VIX_QUOTE_LIST_URL,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ SortColumn: "", AscDesc: "A" }),
+      next: { revalidate: 15 },
+    },
+    FETCH_TIMEOUT_MS,
   );
-  if (dates.length === 0) return null;
+  if (!res?.ok) return null;
+  try {
+    const payload = (await res.json()) as { RtData?: { QuoteList?: TaifexVixItem[] } };
+    const item = payload.RtData?.QuoteList?.find(
+      (row) => row.SymbolID?.toUpperCase() === "TAIWANVIX",
+    );
+    const price = parseOptionalNumber(item?.CLastPrice);
+    if (!item || price == null || price <= 0) return null;
 
-  const latest = await fetchTaiwanVixDailyClose(dates[0]!);
-  if (latest == null || latest <= 0) return null;
+    const ref = parseOptionalNumber(item.CRefPrice);
+    const change =
+      parseOptionalNumber(item.CDiff) ??
+      (ref != null && ref > 0 ? price - ref : undefined);
+    // CDiffRate 已經是小數（"0.0454" 代表 +4.54%），不可再除以 100
+    const changePercent =
+      ref != null && ref > 0 ? (price - ref) / ref : parseOptionalNumber(item.CDiffRate);
 
-  let change: number | undefined;
-  let changePercent: number | undefined;
-  if (dates[1]) {
-    const previous = await fetchTaiwanVixDailyClose(dates[1]);
-    if (previous != null && previous > 0) {
-      change = latest - previous;
-      changePercent = change / previous;
+    // 用期交所標示的資料日期存，不能用「今天」——週末、開盤前打開 App
+    // 拿到的是上一個交易日的值。
+    if (item.CDate && /^\d{8}$/.test(item.CDate)) {
+      persistDailyClose(TAIWAN_VIX_SYMBOL, item.CDate, price);
     }
+    return {
+      symbol: TAIWAN_VIX_SYMBOL,
+      name: item.DispEName ?? "TAIWAN VIX",
+      price,
+      currency: "TWD",
+      change,
+      changePercent,
+    };
+  } catch {
+    return null;
   }
+}
 
+export async function fetchTaiwanVixQuote(): Promise<QuoteResult | null> {
+  const live = await fetchLiveVix();
+  if (live) return live;
+
+  // MIS 失敗：補齊最近兩週的官方收盤，再用快取的最後兩筆算漲跌
+  const end = new Date();
+  const start = new Date(end.getTime() - 14 * 86_400_000);
+  await syncVixHistory(start, end).catch(() => []);
+  const cached = await getDayChangeFromCache(TAIWAN_VIX_SYMBOL, Infinity);
+  if (!cached) return null;
   return {
     symbol: TAIWAN_VIX_SYMBOL,
     name: "TAIWAN VIX",
-    price: latest,
     currency: "TWD",
-    change,
-    changePercent,
+    ...cached,
+    stale: true,
   };
 }

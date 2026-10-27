@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { CUSTOM_SERIES, TAIWAN_VIX_SYMBOL } from "@/lib/custom-series-symbols";
 import {
   fetchTaiwanChineseName,
   isTaiwanSymbol,
@@ -124,8 +125,11 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
   if (!q) return [];
 
   const upperQ = q.toUpperCase();
-  const shouldSuggestTaiwanVix =
-    upperQ.includes("VIX") || upperQ.includes("TWN");
+  const suggestedSeries = CUSTOM_SERIES.filter((series) =>
+    series.symbol === TAIWAN_VIX_SYMBOL
+      ? upperQ.includes("VIX") || upperQ.includes("TWN")
+      : upperQ.includes("MARGIN") || q.includes("融資") || q.includes("維持率"),
+  );
 
   const [local, remote, twByName] = await Promise.all([
     searchLocalInstruments(q),
@@ -135,14 +139,14 @@ export async function searchInstruments(query: string): Promise<SearchResult[]> 
 
   const seen = new Set<string>();
   const merged: SearchResult[] = [];
-  if (shouldSuggestTaiwanVix) {
+  for (const series of suggestedSeries) {
     merged.push({
-      symbol: "VIXTWN",
-      name: "TAIWAN VIX",
-      exchange: "TAIFEX",
+      symbol: series.symbol,
+      name: series.name,
+      exchange: series.exchange,
       type: "INDEX",
     });
-    seen.add("VIXTWN");
+    seen.add(series.symbol);
   }
   // 中文名稱查詢結果來自交易所官方 API，最準確，優先排前面
   for (const item of [...twByName, ...local, ...remote]) {

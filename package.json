@@ -26,6 +26,7 @@
     "watchlists:migrate": "tsx scripts/apply-watchlist-schema.ts",
     "market:sync": "tsx scripts/market-sync.ts",
     "market:sync:history": "tsx scripts/market-sync.ts --history",
+    "market:backfill-series": "tsx --tsconfig tsconfig.test.json scripts/backfill-market-series.ts",
     "postinstall": "prisma generate",
     "electron:dev": "electron .",
     "dist:win": "npm run build:app && electron-builder --win -c electron-builder.config.cjs"

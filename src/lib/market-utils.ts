@@ -1,3 +1,5 @@
+import { isCustomSeriesSymbol } from "@/lib/custom-series-symbols";
+
 /** 常見以 USD 計價的加密貨幣代號（含無 -USD 後綴的持倉） */
 
 const CRYPTO_BASE_SYMBOLS = new Set([
@@ -317,4 +319,13 @@ export function reconcileTaiwanQuoteFromPreviousClose(
   return { price, change, changePercent: prevClose > 0 ? change / prevClose : 0 };
 }
 
-
+/** 交易代號 → Yahoo 查價代號（例：AVAX → AVAX-USD） */
+export function resolveYahooQuoteSymbol(symbol: string): string {
+  const s = symbol.trim().toUpperCase();
+  if (isCustomSeriesSymbol(s)) return s;
+  if (!s || s.includes("-") || s.endsWith(".TW") || s.endsWith(".TWO")) {
+    return symbol.trim();
+  }
+  if (isCryptoSymbol(s)) return `${s}-USD`;
+  return symbol.trim();
+}

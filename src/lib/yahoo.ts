@@ -12,6 +12,8 @@ import {
   isTaiexSymbol,
   persistTaiexGapClose,
 } from "@/lib/market-data/taiex";
+import { isCustomSeriesSymbol, isTaiwanMarginSymbol } from "@/lib/custom-series-symbols";
+import { fetchTaiwanMarginQuote } from "@/lib/market-data/taiwan-margin";
 import { fetchTaiwanVixQuote, isTaiwanVixSymbol } from "@/lib/market-data/taiwan-vix";
 import {
   computeChangeFromBars,
@@ -118,6 +120,8 @@ async function getLiveQuoteFromChart(symbol: string): Promise<QuoteResult | null
 }
 
 async function getWeekChangeFromChart(symbol: string): Promise<number | null> {
+  // 自組序列 Yahoo 查不到，直接用 PriceCache
+  if (isCustomSeriesSymbol(symbol)) return getWeekChangeFromCache(symbol);
   try {
     const fromRange = await getWeekChangeViaRangeApi(symbol);
     if (fromRange != null) return fromRange;
@@ -149,6 +153,9 @@ export async function getWeekChangePercents(
 export async function validateSymbol(symbol: string): Promise<QuoteResult | null> {
   if (isTaiwanVixSymbol(symbol)) {
     return fetchTaiwanVixQuote();
+  }
+  if (isTaiwanMarginSymbol(symbol)) {
+    return fetchTaiwanMarginQuote(symbol.trim().toUpperCase());
   }
   try {
     const quote = await yahooQuote(resolveYahooQuoteSymbol(symbol));
@@ -290,6 +297,10 @@ async function fetchQuoteLive(symbol: string): Promise<QuoteResult> {
   if (isTaiwanVixSymbol(symbol)) {
     const twVix = await fetchTaiwanVixQuote();
     return twVix ?? { symbol: TAIWAN_VIX_SYMBOL, price: 0 };
+  }
+  if (isTaiwanMarginSymbol(symbol)) {
+    const upper = symbol.trim().toUpperCase();
+    return (await fetchTaiwanMarginQuote(upper)) ?? { symbol: upper, price: 0 };
   }
 
   const quoteSymbol = resolveYahooQuoteSymbol(symbol);

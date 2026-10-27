@@ -3,7 +3,8 @@ import "server-only";
 import { dbWriteLimiter } from "@/lib/concurrency-limiter";
 import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
-import { resolveYahooQuoteSymbol, type OhlcBar } from "@/lib/market-data/yahoo-chart";
+import type { OhlcBar } from "@/lib/market-data/yahoo-chart";
+import { resolveYahooQuoteSymbol } from "@/lib/market-utils";
 
 /** PriceCache 資料表的讀寫：各資料來源抓到的日收盤都存在這裡，網路失敗時
  *  也從這裡退回舊資料。 */
@@ -23,16 +24,28 @@ export function enqueuePriceCacheWrite(work: () => Promise<void>): void {
 /** 寫入單一日收盤（open=high=low=close），給只有收盤值的來源用（台灣 VIX、
  *  證交所的加權指數校正值）。dateKey 為 YYYYMMDD。 */
 export function persistDailyClose(symbol: string, dateKey: string, value: number): void {
-  const date = startOfDay(
+  enqueuePriceCacheWrite(() => upsertDailyClose(symbol, dateKey, value));
+}
+
+/** 同 persistDailyClose，但會等寫入完成（給需要接著讀回的同步流程與腳本用） */
+export async function upsertDailyClose(
+  symbol: string,
+  dateKey: string,
+  value: number,
+): Promise<void> {
+  const date = dateFromKey(dateKey);
+  await prisma.priceCache.upsert({
+    where: { symbol_date: { symbol, date } },
+    create: { symbol, date, open: value, high: value, low: value, close: value },
+    update: { open: value, high: value, low: value, close: value, cachedAt: new Date() },
+  });
+}
+
+/** YYYYMMDD → PriceCache 使用的 UTC 午夜日期 */
+export function dateFromKey(dateKey: string): Date {
+  return startOfDay(
     new Date(`${dateKey.slice(0, 4)}-${dateKey.slice(4, 6)}-${dateKey.slice(6, 8)}`),
   );
-  enqueuePriceCacheWrite(async () => {
-    await prisma.priceCache.upsert({
-      where: { symbol_date: { symbol, date } },
-      create: { symbol, date, open: value, high: value, low: value, close: value },
-      update: { open: value, high: value, low: value, close: value, cachedAt: new Date() },
-    });
-  });
 }
 
 /**
