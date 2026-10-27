@@ -10,6 +10,8 @@
  *   get_performance       — 讀取分析頁的績效快取（回檔／最大回撤／夏普／波動率／基準比較）
  *   create_note           — 新增一則投資筆記
  *   update_note           — 編輯既有筆記（標題／內容／類型／日期／關聯標的／標籤，或用 append_content 在既有內容後補充，用於協作式追蹤同一則筆記的後續想法）
+ *   preview_transactions — 批次記帳第一步：檢查一批交易（例如讀截圖得到的），不寫入
+ *   create_transactions  — 批次記帳第二步：使用者確認後寫入
  *
  * 由 scripts/mcp-server.ts 載入（那邊先設定好環境才能 import src/lib），
  * 不要直接執行這個檔案。
@@ -34,6 +36,11 @@ import {
   getHoldings as getEngineHoldings,
   getPortfolioSummary as getEngineSummary,
 } from "@/lib/portfolio-engine";
+import {
+  createTransactionBatch,
+  previewTransactionBatch,
+  type BatchTransactionRow,
+} from "@/lib/transaction-batch";
 import { toNumber as toNum } from "@/lib/utils";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -669,6 +676,29 @@ async function getPortfolioSummary() {
   };
 }
 
+// ── tools: preview_transactions / create_transactions ───────────────────────
+// 邏輯在 src/lib/transaction-batch.ts（之後 app 內的截圖記帳也共用）。
+
+const TRANSACTION_ROWS_SCHEMA = {
+  type: "array",
+  description: "要記的交易，每筆一列。同一張截圖裡的多筆成交各自一列",
+  items: {
+    type: "object",
+    properties: {
+      date: { type: "string", description: "成交日期 YYYY-MM-DD" },
+      account: { type: "string", description: "帳戶名稱（部分比對即可，例如「永豐」「Firstrade」「Binance」）" },
+      type: { type: "string", description: "BUY / SELL / DIVIDEND / DEPOSIT / WITHDRAWAL" },
+      symbol: { type: "string", description: "標的代號。台股可只寫數字（例如 2330、00631L），會自動對應 .TW／.TWO；出入金不用填" },
+      quantity: { type: "number", description: "股數（不是張數；1 張 = 1000 股）。出入金不用填" },
+      price: { type: "number", description: "成交單價；出入金為金額" },
+      fee: { type: "number", description: "截圖上的手續費；沒有就不要填，會依帳戶費率計算" },
+      tax: { type: "number", description: "截圖上的交易稅；沒有就不要填，會依帳戶稅率計算" },
+      note: { type: "string", description: "備註（選填）" },
+    },
+    required: ["date", "account", "type", "price"],
+  },
+} as const;
+
 // ── MCP Server ───────────────────────────────────────────────────────────────
 
 const server = new Server(
@@ -798,6 +828,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["id"],
       },
     },
+    {
+      name: "preview_transactions",
+      description:
+        "記帳第一步（不寫入）：把一批交易（通常是從使用者給的券商成交截圖讀出來的）逐筆檢查，回傳解析結果給使用者確認。" +
+        "會解析帳戶與標的代號、依帳戶費率算出手續費／稅並跟截圖上的值比對（對不上通常代表數量或單價讀錯）、推算持股並提醒超賣、" +
+        "列出資料庫裡同日同數量同價格的既有交易（existingSimilar）與本批次內完全相同的列（identicalInBatch）。" +
+        "這些只是提醒、不會擋：請你根據截圖判斷是重複記帳還是真的分開成交，把判斷跟整理好的表格一起給使用者看。" +
+        "使用者確認後，再用 create_transactions 寫入同一批資料。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          transactions: TRANSACTION_ROWS_SCHEMA,
+        },
+        required: ["transactions"],
+      },
+    },
+    {
+      name: "create_transactions",
+      description:
+        "記帳第二步（寫入）：只在使用者看過 preview_transactions 的結果並明確同意後呼叫，傳入同一批交易。" +
+        "任何一筆有錯誤就整批不寫；不會自動略過重複，內容完全相同的列會照樣各記一筆。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          transactions: TRANSACTION_ROWS_SCHEMA,
+        },
+        required: ["transactions"],
+      },
+    },
   ],
 }));
 
@@ -842,6 +901,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         id: string; title?: string; content?: string; append_content?: string;
         kind?: string; note_date?: string; symbols?: string[]; tags?: string[];
       });
+    } else if (name === "preview_transactions") {
+      result = await previewTransactionBatch((args as { transactions: BatchTransactionRow[] }).transactions);
+    } else if (name === "create_transactions") {
+      result = await createTransactionBatch((args as { transactions: BatchTransactionRow[] }).transactions);
     } else {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }

@@ -79,11 +79,16 @@ export async function listTransactions() {
   }));
 }
 
-/** 新增交易；完全相同的內容同時送出多次只會寫入一筆（見 inFlightCreates）。 */
+/** 新增交易；完全相同的內容同時送出多次只會寫入一筆（見 inFlightCreates）。
+ *  allowIdentical：不做重複送出的防護，照樣寫入——批次記帳時同一批裡本來就
+ *  可能有兩筆數量、價格完全相同的成交，要不要記成兩筆由呼叫端（看過截圖的
+ *  AI 或使用者）判斷。 */
 export async function createTransaction(
   input: CreateTransactionInput,
+  options?: { allowIdentical?: boolean },
 ): Promise<CreateTransactionResult> {
   if (!input.type || !input.date) throw new ServiceError("缺少必要欄位");
+  if (options?.allowIdentical) return doCreateTransaction(input, true);
 
   const fingerprint = JSON.stringify({
     symbol: input.symbol ?? null,
@@ -110,6 +115,7 @@ export async function createTransaction(
 
 async function doCreateTransaction(
   input: CreateTransactionInput,
+  allowIdentical = false,
 ): Promise<CreateTransactionResult> {
   const txType = input.type.toUpperCase();
   const date = parseTxDate(input.date);
@@ -121,17 +127,19 @@ async function doCreateTransaction(
     const amt = Number(input.price ?? input.quantity);
     if (!amt || amt <= 0) throw new ServiceError("請輸入有效金額");
 
-    const recentDuplicate = await prisma.transaction.findFirst({
-      where: {
-        accountId: account.id,
-        instrumentId: null,
-        type: txType,
-        date,
-        price: amt,
-        note: note ?? null,
-        createdAt: { gte: recentSince },
-      },
-    });
+    const recentDuplicate = allowIdentical
+      ? null
+      : await prisma.transaction.findFirst({
+          where: {
+            accountId: account.id,
+            instrumentId: null,
+            type: txType,
+            date,
+            price: amt,
+            note: note ?? null,
+            createdAt: { gte: recentSince },
+          },
+        });
     if (recentDuplicate) {
       return { transaction: recentDuplicate, warning: null, created: false };
     }
@@ -169,21 +177,23 @@ async function doCreateTransaction(
     warning = checkSellExceedsHolding(txType, qty, held);
   }
 
-  const recentDuplicate = await prisma.transaction.findFirst({
-    where: {
-      accountId: account.id,
-      instrumentId: instrument.id,
-      type: txType,
-      date,
-      quantity: qty,
-      price: px,
-      fee,
-      tax,
-      note: note ?? null,
-      createdAt: { gte: recentSince },
-    },
-    include: TX_INCLUDE,
-  });
+  const recentDuplicate = allowIdentical
+    ? null
+    : await prisma.transaction.findFirst({
+        where: {
+          accountId: account.id,
+          instrumentId: instrument.id,
+          type: txType,
+          date,
+          quantity: qty,
+          price: px,
+          fee,
+          tax,
+          note: note ?? null,
+          createdAt: { gte: recentSince },
+        },
+        include: TX_INCLUDE,
+      });
   if (recentDuplicate) {
     return { transaction: recentDuplicate, warning, created: false };
   }
