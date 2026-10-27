@@ -4,14 +4,21 @@ import { prisma } from "@/lib/db";
 export async function GET() {
   const tags = await prisma.tag.findMany({
     orderBy: { name: "asc" },
-    include: { _count: { select: { instruments: true } } },
+    include: {
+      instruments: {
+        select: { instrument: { select: { id: true, symbol: true, name: true } } },
+      },
+    },
   });
 
   return NextResponse.json({
     categories: tags.map((t) => ({
       id: t.id,
       name: t.name,
-      instrumentCount: t._count.instruments,
+      instrumentCount: t.instruments.length,
+      instruments: t.instruments
+        .map((x) => x.instrument)
+        .sort((a, b) => a.symbol.localeCompare(b.symbol)),
     })),
   });
 }
