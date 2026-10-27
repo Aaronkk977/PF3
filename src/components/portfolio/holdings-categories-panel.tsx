@@ -1,24 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Check, Plus, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Modal } from "@/components/ui/modal";
 import {
   SymbolSearchInput,
   type SymbolSuggestion as SearchSymbolSuggestion,
 } from "@/components/portfolio/symbol-search-input";
-import { formatSymbolWithName, instrumentHref } from "@/lib/instrument-nav";
+import { instrumentHref } from "@/lib/instrument-nav";
+import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import {
   filterCategories,
   type CategoryInstrument,
 } from "@/lib/category-filter";
-import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { cn } from "@/lib/utils";
 import type { HoldingPosition } from "@/lib/holding-types";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
@@ -34,42 +42,23 @@ export type CategoryRow = {
 
 type WatchlistOption = { id: string; name: string; symbolCount: number };
 
-function NewCategoryModal({
-  watchlists,
-  onClose,
-  onCreated,
-}: {
-  watchlists: WatchlistWithEntries[];
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [symbolQuery, setSymbolQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<SearchSymbolSuggestion[]>([]);
-  const [pending, setPending] = useState<{ symbol: string; name: string }[]>(
-    [],
-  );
-  const [watchlistId, setWatchlistId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+const UNCATEGORIZED_ID = "__uncategorized";
+const NEW_CATEGORY_ID = "__new";
 
-  function pickWatchlist(id: string) {
-    setWatchlistId(id);
-    const wl = watchlists.find((w) => w.id === id);
-    if (!wl) return;
-    if (!name.trim()) setName(wl.name);
-    const symbolItems = wl.items.filter((i) => i.kind === "SYMBOL");
-    setPending((prev) => {
-      const existing = new Set(prev.map((p) => p.symbol.toUpperCase()));
-      const additions = symbolItems
-        .filter((i) => !existing.has(i.symbol.toUpperCase()))
-        .map((i) => ({ symbol: i.symbol, name: i.name?.trim() || i.symbol }));
-      return [...prev, ...additions];
-    });
-  }
+/** 台股代號去掉 .TW / .TWO 後綴，其餘原樣顯示 */
+function shortSymbol(symbol: string): string {
+  return symbol.replace(/\.(TW|TWO)$/i, "");
+}
+
+/** 搜尋框輸入時向 /api/instruments/search 取建議（防抖 280ms） */
+function useSymbolSuggestions(query: string): [
+  SearchSymbolSuggestion[],
+  (s: SearchSymbolSuggestion[]) => void,
+] {
+  const [suggestions, setSuggestions] = useState<SearchSymbolSuggestion[]>([]);
 
   useEffect(() => {
-    const raw = symbolQuery.split(" — ")[0]?.trim() ?? symbolQuery.trim();
+    const raw = query.split(" — ")[0]?.trim() ?? query.trim();
     if (raw.length < 1) {
       setSuggestions([]);
       return;
@@ -101,7 +90,560 @@ function NewCategoryModal({
         .catch(() => setSuggestions([]));
     }, 280);
     return () => clearTimeout(t);
-  }, [symbolQuery]);
+  }, [query]);
+
+  return [suggestions, setSuggestions];
+}
+
+/** 量測 grid 目前有幾欄，用來把展開區插在被點卡片那一列的後面 */
+function useGridColumnCount(enabled: boolean) {
+  const ref = useRef<HTMLUListElement>(null);
+  const [columns, setColumns] = useState(1);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const count = getComputedStyle(el)
+        .gridTemplateColumns.split(" ")
+        .filter(Boolean).length;
+      setColumns(Math.max(1, count));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled]);
+
+  return [ref, columns] as const;
+}
+
+/** 收合狀態的卡片：只顯示名稱與檔數，點了在原地展開 */
+function Tile({
+  label,
+  count,
+  open,
+  dashed,
+  icon,
+  onClick,
+}: {
+  label: string;
+  count?: number;
+  open: boolean;
+  dashed?: boolean;
+  icon?: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={open}
+      className={cn(
+        "flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
+        dashed && "border-dashed",
+        open
+          ? "border-[color-mix(in_srgb,var(--color-primary)_60%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_8%,transparent)]"
+          : "border-[var(--color-card-border)] hover:border-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_3%,transparent)]",
+      )}
+    >
+      <span className="flex min-w-0 items-baseline gap-2">
+        {icon}
+        <span
+          className={cn(
+            "truncate font-medium",
+            dashed && !open && "text-[var(--color-muted)]",
+          )}
+        >
+          {label}
+        </span>
+        {count !== undefined && (
+          <span className="tabular-nums text-xs text-[var(--color-muted)]">
+            {count}
+          </span>
+        )}
+      </span>
+      {count !== undefined && (
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-[var(--color-muted)] transition-transform duration-300 ease-in-out",
+            open && "rotate-180",
+          )}
+          aria-hidden
+        />
+      )}
+    </button>
+  );
+}
+
+/** 展開區外框（橫跨整列） */
+function DetailShell({
+  title,
+  actions,
+  children,
+}: {
+  title: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--color-card-border)] bg-[color-mix(in_srgb,var(--color-foreground)_3%,transparent)] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-2">{title}</div>
+        {actions && <div className="flex items-center gap-1">{actions}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** 展開區裡的一行標的：代號＋名稱，未持有的字變淡，滑過才出現移除鈕 */
+function InstrumentRow({
+  symbol,
+  name,
+  held,
+  highlighted,
+  from,
+  onRemove,
+}: {
+  symbol: string;
+  name: string | null;
+  held: boolean;
+  highlighted?: boolean;
+  from: string;
+  onRemove?: () => void;
+}) {
+  const cleanName = name?.trim();
+  const showName =
+    cleanName && cleanName.toUpperCase() !== symbol.toUpperCase();
+  return (
+    <li
+      className={cn(
+        "group flex items-center gap-2 border-b border-[var(--color-card-border)]/40 py-1.5 text-sm",
+        highlighted &&
+          "rounded bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] px-1.5",
+      )}
+    >
+      <Link
+        href={instrumentHref(symbol, from)}
+        title={`${symbol}${held ? "" : "（目前未持有）"}`}
+        className={cn(
+          "flex min-w-0 flex-1 items-baseline gap-2 hover:text-[var(--color-primary)]",
+          held ? "text-[var(--color-foreground)]" : "text-[var(--color-muted)]",
+        )}
+      >
+        <span className="min-w-[3.5rem] shrink-0 font-mono tabular-nums">
+          {shortSymbol(symbol)}
+        </span>
+        {showName && <span className="truncate">{cleanName}</span>}
+      </Link>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`從類別移除 ${symbol}`}
+          title="從此類別移除"
+          className="shrink-0 rounded p-0.5 text-[var(--color-muted)] opacity-0 transition-opacity hover:text-[var(--color-negative)] focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      )}
+    </li>
+  );
+}
+
+/**
+ * 清單尾端的空白列：平常是「＋ 新增標的」，點了原地變成代號輸入框。
+ * 選建議或按 Enter 加入，加入後保持開啟可以連續輸入；Esc 或清空後離開就收起。
+ */
+function AddInstrumentRow({
+  onAdd,
+}: {
+  onAdd: (symbol: string, name?: string | null) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [suggestions, setSuggestions] = useSymbolSuggestions(query);
+
+  async function add(symbol: string, name?: string | null) {
+    setBusy(true);
+    try {
+      if (await onAdd(symbol, name)) {
+        setQuery("");
+        setSuggestions([]);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function close() {
+    setEditing(false);
+    setQuery("");
+    setSuggestions([]);
+  }
+
+  if (!editing) {
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="flex w-full items-center gap-2 border-b border-dashed border-[var(--color-card-border)]/60 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+          新增標的
+        </button>
+      </li>
+    );
+  }
+
+  return (
+    <li className="py-1">
+      <SymbolSearchInput
+        value={query}
+        suggestions={suggestions}
+        onQueryChange={setQuery}
+        onSelect={(item) => void add(item.symbol, item.name)}
+        autoFocus
+        inputClassName="h-7 px-2 text-sm"
+        placeholder={busy ? "加入中…" : "代號或名稱，Enter 加入"}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const raw = query.split(" — ")[0]?.trim() ?? "";
+            if (raw && !busy) void add(normalizeSymbolInput(raw));
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            close();
+          }
+        }}
+        onBlur={() => {
+          if (!query.trim() && !busy) close();
+        }}
+      />
+    </li>
+  );
+}
+
+const rowGridClass = "grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3";
+
+const dangerButtonClass =
+  "border border-[color-mix(in_srgb,var(--color-negative)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-negative)_15%,transparent)] text-[var(--color-negative)] hover:bg-[color-mix(in_srgb,var(--color-negative)_25%,transparent)]";
+
+function CategoryDetail({
+  category,
+  holdings,
+  heldInstrumentIds,
+  highlightedIds,
+  watchlistOptions,
+  from,
+  onChanged,
+  onDeleted,
+  onError,
+}: {
+  category: CategoryRow;
+  holdings: HoldingPosition[];
+  heldInstrumentIds: Set<string>;
+  highlightedIds: Set<string>;
+  watchlistOptions: WatchlistOption[];
+  from: string;
+  onChanged: () => Promise<void>;
+  onDeleted: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [editName, setEditName] = useState(category.name);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [applyWatchlistId, setApplyWatchlistId] = useState("");
+  const [applying, setApplying] = useState(false);
+
+  async function saveRename() {
+    const name = editName.trim();
+    if (!name) return;
+    onError(null);
+    const res = await fetch(`/api/categories/${category.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      onError(j.error ?? "更新失敗");
+      return;
+    }
+    setRenaming(false);
+    await onChanged();
+  }
+
+  async function deleteCategory() {
+    onError(null);
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/categories/${category.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        onError("刪除失敗");
+        return;
+      }
+      await onDeleted();
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function removeInstrument(instrumentId: string) {
+    onError(null);
+    const res = await fetch(
+      `/api/categories/${category.id}/instruments?instrumentId=${encodeURIComponent(instrumentId)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok) {
+      onError("移除失敗");
+      return;
+    }
+    await onChanged();
+  }
+
+  async function addInstrument(
+    symbol: string,
+    displayName?: string | null,
+  ): Promise<boolean> {
+    onError(null);
+    const normalized = normalizeSymbolInput(symbol);
+    const holding = holdings.find(
+      (h) => h.symbol.toUpperCase() === normalized.toUpperCase(),
+    );
+    let instrumentId = holding?.instrumentId;
+
+    if (!instrumentId) {
+      const createRes = await fetch("/api/instruments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: normalized,
+          name: displayName?.trim() || undefined,
+        }),
+      });
+      if (!createRes.ok) {
+        const j = (await createRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        onError(j.error ?? "找不到持倉或無法建立標的");
+        return false;
+      }
+      const created = (await createRes.json()) as { id: string };
+      instrumentId = created.id;
+    }
+
+    const res = await fetch(`/api/categories/${category.id}/instruments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrumentId }),
+    });
+    if (!res.ok) {
+      onError("加入失敗");
+      return false;
+    }
+    await onChanged();
+    return true;
+  }
+
+  async function applyWatchlist() {
+    if (!applyWatchlistId) return;
+    onError(null);
+    setApplying(true);
+    try {
+      const res = await fetch(`/api/categories/${category.id}/from-watchlist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watchlistId: applyWatchlistId }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        onError(j.error ?? "套用失敗");
+        return;
+      }
+      setApplyWatchlistId("");
+      await onChanged();
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const title = renaming ? (
+    <Input
+      value={editName}
+      onChange={(e) => setEditName(e.target.value)}
+      className="h-8 w-48 px-2 text-sm"
+      autoFocus
+      aria-label="類別名稱"
+      onKeyDown={(e) => {
+        if (e.key === "Enter") void saveRename();
+        if (e.key === "Escape") {
+          setRenaming(false);
+          setEditName(category.name);
+        }
+      }}
+    />
+  ) : (
+    <>
+      <h4 className="truncate text-sm font-semibold">{category.name}</h4>
+      <span className="tabular-nums text-xs text-[var(--color-muted)]">
+        {category.instrumentCount} 檔
+      </span>
+    </>
+  );
+
+  const actions = renaming ? (
+    <>
+      <Button type="button" size="sm" onClick={() => void saveRename()}>
+        儲存
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          setRenaming(false);
+          setEditName(category.name);
+        }}
+      >
+        取消
+      </Button>
+    </>
+  ) : confirmingDelete ? (
+    <>
+      <span className="mr-1 text-xs text-[var(--color-muted)]">
+        {category.instrumentCount > 0
+          ? `${category.instrumentCount} 檔會解除此分類，交易紀錄不受影響`
+          : "此類別沒有標的"}
+      </span>
+      <Button
+        type="button"
+        size="sm"
+        className={dangerButtonClass}
+        disabled={deleting}
+        autoFocus
+        onClick={() => void deleteCategory()}
+      >
+        {deleting ? "刪除中…" : "確定刪除"}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        onClick={() => setConfirmingDelete(false)}
+      >
+        取消
+      </Button>
+    </>
+  ) : (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+        onClick={() => setRenaming(true)}
+      >
+        <Pencil className="mr-1 h-3.5 w-3.5" aria-hidden />
+        改名
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="text-[var(--color-muted)] hover:text-[var(--color-negative)]"
+        onClick={() => setConfirmingDelete(true)}
+      >
+        <Trash2 className="mr-1 h-3.5 w-3.5" aria-hidden />
+        刪除類別
+      </Button>
+    </>
+  );
+
+  return (
+    <DetailShell title={title} actions={actions}>
+      <ul className={rowGridClass}>
+        {category.instruments.map((inst) => (
+          <InstrumentRow
+            key={inst.id}
+            symbol={inst.symbol}
+            name={inst.name}
+            held={heldInstrumentIds.has(inst.id)}
+            highlighted={highlightedIds.has(inst.id)}
+            from={from}
+            onRemove={() => void removeInstrument(inst.id)}
+          />
+        ))}
+        <AddInstrumentRow onAdd={addInstrument} />
+      </ul>
+      {watchlistOptions.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <p className="text-xs text-[var(--color-muted)]">或套用整個追蹤清單</p>
+          <Select
+            value={applyWatchlistId}
+            onChange={(e) => setApplyWatchlistId(e.target.value)}
+            className="h-8 max-w-[10rem] py-1 text-xs"
+          >
+            <option value="">選擇追蹤清單</option>
+            {watchlistOptions.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}（{w.symbolCount}）
+              </option>
+            ))}
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!applyWatchlistId || applying}
+            onClick={() => void applyWatchlist()}
+          >
+            {applying ? "套用中…" : "套用"}
+          </Button>
+        </div>
+      )}
+    </DetailShell>
+  );
+}
+
+function NewCategoryForm({
+  watchlists,
+  onCancel,
+  onCreated,
+}: {
+  watchlists: WatchlistWithEntries[];
+  onCancel: () => void;
+  onCreated: (id: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [symbolQuery, setSymbolQuery] = useState("");
+  const [suggestions, setSuggestions] = useSymbolSuggestions(symbolQuery);
+  const [pending, setPending] = useState<{ symbol: string; name: string }[]>(
+    [],
+  );
+  const [watchlistId, setWatchlistId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function pickWatchlist(id: string) {
+    setWatchlistId(id);
+    const wl = watchlists.find((w) => w.id === id);
+    if (!wl) return;
+    if (!name.trim()) setName(wl.name);
+    const symbolItems = wl.items.filter((i) => i.kind === "SYMBOL");
+    setPending((prev) => {
+      const existing = new Set(prev.map((p) => p.symbol.toUpperCase()));
+      const additions = symbolItems
+        .filter((i) => !existing.has(i.symbol.toUpperCase()))
+        .map((i) => ({ symbol: i.symbol, name: i.name?.trim() || i.symbol }));
+      return [...prev, ...additions];
+    });
+  }
 
   function addPending(item: SearchSymbolSuggestion) {
     const symbol = normalizeSymbolInput(item.symbol);
@@ -112,10 +654,6 @@ function NewCategoryModal({
     );
     setSymbolQuery("");
     setSuggestions([]);
-  }
-
-  function removePending(symbol: string) {
-    setPending((prev) => prev.filter((p) => p.symbol !== symbol));
   }
 
   async function submit() {
@@ -150,8 +688,7 @@ function NewCategoryModal({
         });
       }
 
-      onCreated();
-      onClose();
+      await onCreated(created.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "建立失敗");
     } finally {
@@ -160,22 +697,49 @@ function NewCategoryModal({
   }
 
   return (
-    <Modal title="新增類別" onClose={onClose}>
-      <div className="space-y-4">
+    <DetailShell
+      title={<h4 className="text-sm font-semibold">新增類別</h4>}
+      actions={
+        <>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+            取消
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!name.trim() || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "建立中…" : "建立"}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
         <Input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="類別名稱"
+          aria-label="新類別名稱"
+          className="max-w-[14rem]"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !suggestions.length) void submit();
+            if (e.key === "Escape") onCancel();
           }}
         />
+        <div className="w-full max-w-sm">
+          <SymbolSearchInput
+            value={symbolQuery}
+            suggestions={suggestions}
+            onQueryChange={setSymbolQuery}
+            onSelect={addPending}
+            placeholder="搜尋代碼一併加入（選填）"
+          />
+        </div>
         {watchlists.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-card-border)]/50 bg-[var(--color-card-border)]/10 p-2.5">
-            <p className="text-xs text-[var(--color-muted)]">
-              或從追蹤清單快速帶入：
-            </p>
+          <div className="flex items-center gap-2 pt-1">
+            <p className="text-xs text-[var(--color-muted)]">或從追蹤清單帶入</p>
             <Select
               value={watchlistId}
               onChange={(e) => pickWatchlist(e.target.value)}
@@ -190,153 +754,45 @@ function NewCategoryModal({
             </Select>
           </div>
         )}
-        <div>
-          <p className="mb-1.5 text-xs text-[var(--color-muted)]">
-            可直接加入子項目（選填）
-          </p>
-          <SymbolSearchInput
-            value={symbolQuery}
-            suggestions={suggestions}
-            onQueryChange={setSymbolQuery}
-            onSelect={addPending}
-            placeholder="搜尋代碼加入此類別"
-          />
-        </div>
-        {pending.length > 0 && (
-          <ul className="flex flex-wrap gap-2">
-            {pending.map((p) => (
-              <li
-                key={p.symbol}
-                className="flex items-center gap-1.5 rounded-full border border-[var(--color-card-border)] px-2.5 py-1 text-xs"
+      </div>
+      {pending.length > 0 && (
+        <ul className={cn(rowGridClass, "mt-3")}>
+          {pending.map((p) => (
+            <li
+              key={p.symbol}
+              className="group flex items-center gap-2 border-b border-[var(--color-card-border)]/40 py-1.5 text-sm"
+            >
+              <span className="min-w-[3.5rem] shrink-0 font-mono tabular-nums">
+                {shortSymbol(p.symbol)}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]">
+                {p.name !== p.symbol ? p.name : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setPending((prev) => prev.filter((x) => x.symbol !== p.symbol))
+                }
+                aria-label={`移除 ${p.symbol}`}
+                className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-negative)]"
               >
-                <span className="font-mono text-[var(--color-primary)]">
-                  {p.symbol}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => removePending(p.symbol)}
-                  aria-label={`移除 ${p.symbol}`}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-negative)]"
-                >
-                  <X className="h-3 w-3" aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {error && <p className="text-xs text-[var(--color-negative)]">{error}</p>}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            取消
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!name.trim() || submitting}
-            onClick={() => void submit()}
-          >
-            {submitting ? "建立中…" : "建立"}
-          </Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-/** 類別裡的單一標的 chip：點代號進標的頁，滑過才明顯出現移除鈕 */
-function InstrumentChip({
-  instrument,
-  held,
-  highlighted,
-  from,
-  onRemove,
-}: {
-  instrument: CategoryInstrument;
-  held: boolean;
-  highlighted: boolean;
-  from: string;
-  onRemove: () => void;
-}) {
-  const name = instrument.name?.trim();
-  return (
-    <li
-      className={cn(
-        "group/chip inline-flex max-w-full items-center rounded-md border text-xs transition-colors",
-        highlighted
-          ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15"
-          : held
-            ? "border-[var(--color-card-border)] bg-[var(--color-card-border)]/20"
-            : "border-dashed border-[var(--color-card-border)]",
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
-    >
-      <Link
-        href={instrumentHref(instrument.symbol, from)}
-        title={held ? "目前持有" : "目前未持有"}
-        className="flex min-w-0 items-center gap-1.5 py-0.5 pl-2 pr-1 hover:text-[var(--color-primary)]"
-      >
-        <span
-          className={cn(
-            "font-mono",
-            held ? "text-[var(--color-foreground)]" : "text-[var(--color-muted)]",
-          )}
-        >
-          {instrument.symbol}
-        </span>
-        {name && name.toUpperCase() !== instrument.symbol.toUpperCase() && (
-          <span className="truncate text-[var(--color-muted)]">{name}</span>
-        )}
-      </Link>
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={`從類別移除 ${instrument.symbol}`}
-        title="從此類別移除"
-        className="mr-0.5 rounded p-0.5 text-[var(--color-muted)] opacity-40 transition-opacity hover:bg-[color-mix(in_srgb,var(--color-negative)_15%,transparent)] hover:text-[var(--color-negative)] focus-visible:opacity-100 group-hover/chip:opacity-100"
-      >
-        <X className="h-3 w-3" aria-hidden />
-      </button>
-    </li>
+      {error && (
+        <p className="mt-2 text-xs text-[var(--color-negative)]">{error}</p>
+      )}
+    </DetailShell>
   );
 }
 
-function DeleteCategoryModal({
-  category,
-  onClose,
-  onConfirm,
-}: {
-  category: CategoryRow;
-  onClose: () => void;
-  onConfirm: () => Promise<void>;
-}) {
-  const [deleting, setDeleting] = useState(false);
-  return (
-    <Modal title={`刪除類別「${category.name}」？`} onClose={onClose}>
-      <p className="text-sm text-[var(--color-muted)]">
-        {category.instrumentCount > 0
-          ? `底下 ${category.instrumentCount} 檔標的會解除此分類，標的本身與交易紀錄不受影響。`
-          : "此類別沒有任何標的。"}
-      </p>
-      <div className="mt-5 flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-          取消
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          autoFocus
-          disabled={deleting}
-          className="border-[color-mix(in_srgb,var(--color-negative)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-negative)_15%,transparent)] text-[var(--color-negative)] hover:bg-[color-mix(in_srgb,var(--color-negative)_25%,transparent)]"
-          onClick={() => {
-            setDeleting(true);
-            void onConfirm().finally(() => setDeleting(false));
-          }}
-        >
-          {deleting ? "刪除中…" : "刪除"}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
+type TileItem =
+  | { kind: "category"; id: string; category: CategoryRow; highlightedIds: Set<string> }
+  | { kind: "uncategorized"; id: typeof UNCATEGORIZED_ID }
+  | { kind: "new"; id: typeof NEW_CATEGORY_ID };
 
 export function HoldingsCategoriesPanel({
   holdings,
@@ -350,26 +806,11 @@ export function HoldingsCategoriesPanel({
   const pathname = usePathname();
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showNewCategoryModal, setShowNewCategoryModal] = useState(false);
-  const [deletingCategory, setDeletingCategory] = useState<CategoryRow | null>(
-    null,
-  );
-  const [filterQuery, setFilterQuery] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [addSymbolQuery, setAddSymbolQuery] = useState("");
-  const [addResolvedSymbol, setAddResolvedSymbol] = useState<string | null>(
-    null,
-  );
-  const [addResolvedName, setAddResolvedName] = useState<string | null>(null);
-  const [addSuggestions, setAddSuggestions] = useState<SearchSymbolSuggestion[]>(
-    [],
-  );
+  const [filterQuery, setFilterQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [watchlists, setWatchlists] = useState<WatchlistWithEntries[]>([]);
-  const [applyWatchlistId, setApplyWatchlistId] = useState("");
-  const [applying, setApplying] = useState(false);
+  const [gridRef, columns] = useGridColumnCount(!loading);
 
   const watchlistOptions: WatchlistOption[] = watchlists.map((w) => ({
     id: w.id,
@@ -377,7 +818,7 @@ export function HoldingsCategoriesPanel({
     symbolCount: w.items.filter((i) => i.kind === "SYMBOL").length,
   }));
 
-  // 重新載入時不切回「載入中」，避免移除／加入標的時整個列表閃一下
+  // 重新載入時不切回「載入中」，避免加入／移除標的時整個面板閃一下
   const loadCategories = useCallback(async () => {
     try {
       const res = await fetch("/api/categories");
@@ -405,50 +846,15 @@ export function HoldingsCategoriesPanel({
     void loadWatchlists();
   }, [loadCategories, loadWatchlists]);
 
-  useEffect(() => {
-    const raw = addSymbolQuery.split(" — ")[0]?.trim() ?? addSymbolQuery.trim();
-    if (raw.length < 1) {
-      setAddSuggestions([]);
-      return;
-    }
-    const shouldFetch =
-      raw.length >= 2 || /^\d{3,4}$/.test(raw) || /[一-鿿]/.test(raw);
-    if (!shouldFetch) {
-      setAddSuggestions([]);
-      return;
-    }
-    const t = setTimeout(() => {
-      void fetch(`/api/instruments/search?q=${encodeURIComponent(raw)}`, {
-        headers: pageRequestHeaders(PAGE_CACHE_KEYS.holdings),
-      })
-        .then((r) => (r.ok ? r.json() : []))
-        .then((j: SearchSymbolSuggestion[]) => {
-          setAddSuggestions(
-            Array.isArray(j)
-              ? j
-                  .filter((i) => i.symbol)
-                  .slice(0, 8)
-                  .map((i) => ({
-                    symbol: i.symbol,
-                    name: i.name?.trim() ? i.name : i.symbol,
-                  }))
-              : [],
-          );
-        })
-        .catch(() => setAddSuggestions([]));
-    }, 280);
-    return () => clearTimeout(t);
-  }, [addSymbolQuery]);
+  async function refreshAfterChange() {
+    await loadCategories();
+    onHoldingsRefresh();
+  }
 
   const heldInstrumentIds = useMemo(
     () =>
       new Set(holdings.filter((h) => h.quantity > 0).map((h) => h.instrumentId)),
     [holdings],
-  );
-
-  const filtered = useMemo(
-    () => filterCategories(categories, filterQuery),
-    [categories, filterQuery],
   );
 
   /** 有持倉但沒有任何類別的標的 */
@@ -461,177 +867,110 @@ export function HoldingsCategoriesPanel({
     );
   }, [categories, holdings]);
 
-  function startRename(cat: CategoryRow) {
-    setEditingId(cat.id);
-    setEditName(cat.name);
-    setExpandedId(null);
-  }
+  const searching = filterQuery.trim().length > 0;
 
-  function cancelRename() {
-    setEditingId(null);
-    setEditName("");
-  }
-
-  function toggleAddInstrument(categoryId: string) {
-    setExpandedId((id) => (id === categoryId ? null : categoryId));
-    setEditingId(null);
-    setAddSymbolQuery("");
-    setAddResolvedSymbol(null);
-    setAddResolvedName(null);
-    setAddSuggestions([]);
-    setApplyWatchlistId("");
-  }
-
-  async function postApplyWatchlist(categoryId: string, watchlistId: string) {
-    const res = await fetch(`/api/categories/${categoryId}/from-watchlist`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ watchlistId }),
-    });
-    if (!res.ok) {
-      const j = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(j.error ?? "套用失敗");
-    }
-  }
-
-  async function applyWatchlistToCategory(categoryId: string) {
-    if (!applyWatchlistId) return;
-    setError(null);
-    setApplying(true);
-    try {
-      await postApplyWatchlist(categoryId, applyWatchlistId);
-      setApplyWatchlistId("");
-      await loadCategories();
-      onHoldingsRefresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "套用失敗");
-    } finally {
-      setApplying(false);
-    }
-  }
-
-  async function saveRename(id: string) {
-    const name = editName.trim();
-    if (!name) return;
-    setError(null);
-    const res = await fetch(`/api/categories/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) {
-      const j = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(j.error ?? "更新失敗");
-      return;
-    }
-    cancelRename();
-    await loadCategories();
-    onHoldingsRefresh();
-  }
-
-  async function removeCategory(id: string) {
-    setError(null);
-    const res = await fetch(`/api/categories/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      setError("刪除失敗");
-      return;
-    }
-    setDeletingCategory(null);
-    if (expandedId === id) setExpandedId(null);
-    await loadCategories();
-    onHoldingsRefresh();
-  }
-
-  async function removeInstrumentFromCategory(
-    categoryId: string,
-    instrumentId: string,
-  ) {
-    setError(null);
-    const res = await fetch(
-      `/api/categories/${categoryId}/instruments?instrumentId=${encodeURIComponent(instrumentId)}`,
-      { method: "DELETE" },
+  const tiles = useMemo<TileItem[]>(() => {
+    const items: TileItem[] = filterCategories(categories, filterQuery).map(
+      ({ category, matchedInstrumentIds }) => ({
+        kind: "category",
+        id: category.id,
+        category,
+        highlightedIds: matchedInstrumentIds,
+      }),
     );
-    if (!res.ok) {
-      setError("移除失敗");
-      return;
-    }
-    await loadCategories();
-    onHoldingsRefresh();
-  }
-
-  async function addInstrumentToCategory(
-    categoryId: string,
-    symbol: string,
-    displayName?: string | null,
-  ) {
-    const normalized = normalizeSymbolInput(symbol);
-    const holding = holdings.find(
-      (h) => h.symbol.toUpperCase() === normalized.toUpperCase(),
-    );
-    let instrumentId = holding?.instrumentId;
-
-    if (!instrumentId) {
-      const createRes = await fetch("/api/instruments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol: normalized,
-          name: displayName?.trim() || undefined,
-        }),
-      });
-      if (!createRes.ok) {
-        const j = (await createRes.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        setError(j.error ?? "找不到持倉或無法建立標的");
-        return;
+    if (!searching) {
+      if (uncategorizedHoldings.length > 0) {
+        items.push({ kind: "uncategorized", id: UNCATEGORIZED_ID });
       }
-      const created = (await createRes.json()) as { id: string };
-      instrumentId = created.id;
+      items.push({ kind: "new", id: NEW_CATEGORY_ID });
     }
+    return items;
+  }, [categories, filterQuery, searching, uncategorizedHoldings.length]);
 
-    const res = await fetch(`/api/categories/${categoryId}/instruments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instrumentId }),
-    });
-    if (!res.ok) {
-      setError("加入失敗");
-      return;
+  /** 搜尋時自動展開第一個符合的類別（目前展開的若仍符合就保持） */
+  function handleFilterChange(value: string) {
+    setFilterQuery(value);
+    if (!value.trim()) return;
+    const matches = filterCategories(categories, value);
+    if (matches.length === 0) return;
+    if (!matches.some((m) => m.category.id === expandedId)) {
+      setExpandedId(matches[0].category.id);
     }
-    setAddSymbolQuery("");
-    setAddResolvedSymbol(null);
-    setAddResolvedName(null);
-    setAddSuggestions([]);
-    await loadCategories();
-    onHoldingsRefresh();
   }
 
-  function handleAddSymbolQuery(query: string) {
-    setAddSymbolQuery(query);
-    setAddResolvedSymbol(null);
-    setAddResolvedName(null);
+  function toggle(id: string) {
+    setError(null);
+    setExpandedId((current) => (current === id ? null : id));
   }
 
-  function handleAddSymbolSelect(
-    categoryId: string,
-    item: SearchSymbolSuggestion,
-  ) {
-    setAddSymbolQuery(formatSymbolWithName(item.symbol, item.name));
-    setAddResolvedSymbol(item.symbol);
-    setAddResolvedName(item.name);
-    setAddSuggestions([]);
-    void addInstrumentToCategory(categoryId, item.symbol, item.name);
+  // 展開區插在被點卡片那一列的最後一張後面
+  const expandedIndex = tiles.findIndex((t) => t.id === expandedId);
+  const detailAfterIndex =
+    expandedIndex < 0
+      ? -1
+      : Math.min(
+          Math.floor(expandedIndex / columns) * columns + columns - 1,
+          tiles.length - 1,
+        );
+  const expandedTile = expandedIndex >= 0 ? tiles[expandedIndex] : null;
+
+  function renderDetail(tile: TileItem) {
+    if (tile.kind === "category") {
+      return (
+        <CategoryDetail
+          key={tile.id}
+          category={tile.category}
+          holdings={holdings}
+          heldInstrumentIds={heldInstrumentIds}
+          highlightedIds={tile.highlightedIds}
+          watchlistOptions={watchlistOptions}
+          from={pathname}
+          onChanged={refreshAfterChange}
+          onDeleted={async () => {
+            setExpandedId(null);
+            await refreshAfterChange();
+          }}
+          onError={setError}
+        />
+      );
+    }
+    if (tile.kind === "uncategorized") {
+      return (
+        <DetailShell
+          title={
+            <>
+              <h4 className="text-sm font-semibold">未分類持倉</h4>
+              <span className="tabular-nums text-xs text-[var(--color-muted)]">
+                {uncategorizedHoldings.length} 檔
+              </span>
+            </>
+          }
+        >
+          <ul className={rowGridClass}>
+            {uncategorizedHoldings.map((h) => (
+              <InstrumentRow
+                key={h.instrumentId}
+                symbol={h.symbol}
+                name={h.name}
+                held
+                from={pathname}
+              />
+            ))}
+          </ul>
+        </DetailShell>
+      );
+    }
+    return (
+      <NewCategoryForm
+        watchlists={watchlists}
+        onCancel={() => setExpandedId(null)}
+        onCreated={async (id) => {
+          await refreshAfterChange();
+          setExpandedId(id);
+        }}
+      />
+    );
   }
-
-  const addSymbolInputRaw =
-    addSymbolQuery.split(" — ")[0]?.trim() ?? addSymbolQuery.trim();
-  const effectiveAddSymbol =
-    addResolvedSymbol ??
-    (addSymbolInputRaw ? normalizeSymbolInput(addSymbolInputRaw) : "");
-
-  const iconButtonClass =
-    "rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-card-border)]/40 hover:text-[var(--color-foreground)]";
 
   return (
     <Card>
@@ -640,34 +979,24 @@ export function HoldingsCategoriesPanel({
           <div>
             <CardTitle>類別</CardTitle>
             <p className="mt-1 text-xs text-[var(--color-muted)]">
-              點名稱改名、點代號看標的；虛線框為目前未持有。持倉配置的「彙總」可依類別分組。
+              點類別展開明細；灰字為目前未持有。持倉配置的「彙總」可依類別分組。
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search
-                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]"
-                aria-hidden
-              />
-              <Input
-                value={filterQuery}
-                onChange={(e) => setFilterQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setFilterQuery("");
-                }}
-                placeholder="搜尋類別或標的"
-                aria-label="搜尋類別或標的"
-                className="h-8 w-44 pl-8 text-xs"
-              />
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => setShowNewCategoryModal(true)}
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
-              新增類別
-            </Button>
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]"
+              aria-hidden
+            />
+            <Input
+              value={filterQuery}
+              onChange={(e) => handleFilterChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setFilterQuery("");
+              }}
+              placeholder="搜尋類別或標的"
+              aria-label="搜尋類別或標的"
+              className="h-8 w-48 pl-8 text-xs"
+            />
           </div>
         </div>
       </CardHeader>
@@ -677,201 +1006,60 @@ export function HoldingsCategoriesPanel({
         )}
         {loading ? (
           <p className="text-sm text-[var(--color-muted)]">載入中…</p>
-        ) : categories.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">尚無類別，請先新增。</p>
-        ) : filtered.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">
-            沒有符合「{filterQuery.trim()}」的類別或標的。
-          </p>
         ) : (
-          <ul className="divide-y divide-[var(--color-card-border)]/60 rounded-lg border border-[var(--color-card-border)]/80">
-            {filtered.map(({ category: cat, matchedInstrumentIds }) => (
-              <li key={cat.id} className="px-3 py-2">
-                <div className="flex items-start gap-3">
-                  <div className="w-28 shrink-0 pt-0.5 sm:w-40">
-                    {editingId === cat.id ? (
-                      <Input
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        className="h-7 px-2 text-sm"
-                        autoFocus
-                        aria-label="類別名稱"
-                        onBlur={cancelRename}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void saveRename(cat.id);
-                          if (e.key === "Escape") cancelRename();
-                        }}
+          <>
+            {tiles.length === 0 && (
+              <p className="text-sm text-[var(--color-muted)]">
+                沒有符合「{filterQuery.trim()}」的類別或標的。
+              </p>
+            )}
+            {/* 沒有結果時也保留 grid，欄數量測才不會失效 */}
+            <ul
+              ref={gridRef}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+            >
+              {tiles.map((tile, index) => (
+                <Fragment key={tile.id}>
+                  <li>
+                    {tile.kind === "category" ? (
+                      <Tile
+                        label={tile.category.name}
+                        count={tile.category.instrumentCount}
+                        open={expandedId === tile.id}
+                        onClick={() => toggle(tile.id)}
+                      />
+                    ) : tile.kind === "uncategorized" ? (
+                      <Tile
+                        label="未分類持倉"
+                        count={uncategorizedHoldings.length}
+                        open={expandedId === tile.id}
+                        dashed
+                        onClick={() => toggle(tile.id)}
                       />
                     ) : (
-                      <button
-                        type="button"
-                        title="點擊變更名稱"
-                        className="max-w-full truncate text-left text-sm font-medium text-[var(--color-foreground)] hover:text-[var(--color-primary)]"
-                        onClick={() => startRename(cat)}
-                      >
-                        {cat.name}
-                        <span className="ml-1.5 text-xs font-normal tabular-nums text-[var(--color-muted)]">
-                          {cat.instrumentCount}
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                  <ul className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-                    {cat.instruments.map((inst) => (
-                      <InstrumentChip
-                        key={inst.id}
-                        instrument={inst}
-                        held={heldInstrumentIds.has(inst.id)}
-                        highlighted={matchedInstrumentIds.has(inst.id)}
-                        from={pathname}
-                        onRemove={() =>
-                          void removeInstrumentFromCategory(cat.id, inst.id)
+                      <Tile
+                        label="新增類別"
+                        open={expandedId === tile.id}
+                        dashed
+                        icon={
+                          <Plus
+                            className="h-3.5 w-3.5 self-center text-[var(--color-muted)]"
+                            aria-hidden
+                          />
                         }
+                        onClick={() => toggle(tile.id)}
                       />
-                    ))}
-                    {cat.instruments.length === 0 && (
-                      <li className="py-0.5 text-xs text-[var(--color-muted)]">
-                        尚無標的
-                      </li>
                     )}
-                  </ul>
-                  <div className="flex shrink-0 items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => toggleAddInstrument(cat.id)}
-                      aria-label={
-                        expandedId === cat.id ? "完成" : `新增標的到 ${cat.name}`
-                      }
-                      title={expandedId === cat.id ? "完成" : "新增標的"}
-                      className={cn(
-                        iconButtonClass,
-                        expandedId === cat.id &&
-                          "bg-[var(--color-primary)]/15 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/25 hover:text-[var(--color-primary)]",
-                      )}
-                    >
-                      {expandedId === cat.id ? (
-                        <Check className="h-4 w-4" aria-hidden />
-                      ) : (
-                        <Plus className="h-4 w-4" aria-hidden />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeletingCategory(cat)}
-                      aria-label={`刪除類別 ${cat.name}`}
-                      title="刪除類別"
-                      className={cn(
-                        iconButtonClass,
-                        "hover:bg-[color-mix(in_srgb,var(--color-negative)_12%,transparent)] hover:text-[var(--color-negative)]",
-                      )}
-                    >
-                      <Trash2 className="h-4 w-4" aria-hidden />
-                    </button>
-                  </div>
-                </div>
-                {expandedId === cat.id && (
-                  <div className="mt-2 flex flex-wrap items-start gap-3 border-t border-[var(--color-card-border)]/60 pt-2 sm:pl-[10.75rem]">
-                    <div className="w-full max-w-sm">
-                      <SymbolSearchInput
-                        value={addSymbolQuery}
-                        suggestions={addSuggestions}
-                        onQueryChange={handleAddSymbolQuery}
-                        onSelect={(s) => handleAddSymbolSelect(cat.id, s)}
-                        placeholder={`搜尋代碼加入「${cat.name}」`}
-                      />
-                      {effectiveAddSymbol && !addResolvedSymbol && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="mt-2"
-                          onClick={() =>
-                            void addInstrumentToCategory(
-                              cat.id,
-                              effectiveAddSymbol,
-                              addResolvedName,
-                            )
-                          }
-                        >
-                          加入 {effectiveAddSymbol}
-                        </Button>
-                      )}
-                    </div>
-                    {watchlistOptions.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <p className="text-xs text-[var(--color-muted)]">
-                          或套用追蹤清單：
-                        </p>
-                        <Select
-                          value={applyWatchlistId}
-                          onChange={(e) => setApplyWatchlistId(e.target.value)}
-                          className="h-8 max-w-[10rem] py-1 text-xs"
-                        >
-                          <option value="">選擇追蹤清單</option>
-                          {watchlistOptions.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name}（{w.symbolCount}）
-                            </option>
-                          ))}
-                        </Select>
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={!applyWatchlistId || applying}
-                          onClick={() => void applyWatchlistToCategory(cat.id)}
-                        >
-                          {applying ? "套用中…" : "套用"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {!loading && !filterQuery.trim() && uncategorizedHoldings.length > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-dashed border-[var(--color-card-border)]/80 px-3 py-2">
-            <p className="w-28 shrink-0 pt-0.5 text-sm text-[var(--color-muted)] sm:w-40">
-              未分類持倉
-              <span className="ml-1.5 text-xs tabular-nums">
-                {uncategorizedHoldings.length}
-              </span>
-            </p>
-            <ul className="flex min-w-0 flex-1 flex-wrap gap-1.5 text-xs">
-              {uncategorizedHoldings.map((h) => (
-                <li key={h.instrumentId}>
-                  <Link
-                    href={instrumentHref(h.symbol, pathname)}
-                    className="flex items-center gap-1.5 rounded-md border border-[var(--color-card-border)] px-2 py-0.5 hover:text-[var(--color-primary)]"
-                  >
-                    <span className="font-mono">{h.symbol}</span>
-                    {h.name && (
-                      <span className="text-[var(--color-muted)]">{h.name}</span>
-                    )}
-                  </Link>
-                </li>
+                  </li>
+                  {index === detailAfterIndex && expandedTile && (
+                    <li className="col-span-full">{renderDetail(expandedTile)}</li>
+                  )}
+                </Fragment>
               ))}
             </ul>
-          </div>
+          </>
         )}
       </CardContent>
-      {showNewCategoryModal && (
-        <NewCategoryModal
-          watchlists={watchlists}
-          onClose={() => setShowNewCategoryModal(false)}
-          onCreated={() => {
-            void loadCategories();
-            onHoldingsRefresh();
-          }}
-        />
-      )}
-      {deletingCategory && (
-        <DeleteCategoryModal
-          category={deletingCategory}
-          onClose={() => setDeletingCategory(null)}
-          onConfirm={() => removeCategory(deletingCategory.id)}
-        />
-      )}
     </Card>
   );
 }

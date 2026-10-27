@@ -1,6 +1,12 @@
 ﻿"use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +19,11 @@ type Props = {
   onSelect: (item: SymbolSuggestion) => void;
   placeholder?: string;
   required?: boolean;
+  autoFocus?: boolean;
+  inputClassName?: string;
+  /** 建議清單沒開著時的按鍵（例如 Enter 直接加入、Esc 取消） */
+  onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
+  onBlur?: () => void;
 };
 
 export function SymbolSearchInput({
@@ -22,6 +33,10 @@ export function SymbolSearchInput({
   onSelect,
   placeholder,
   required,
+  autoFocus,
+  inputClassName,
+  onKeyDown,
+  onBlur,
 }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -54,8 +69,14 @@ export function SymbolSearchInput({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onBlur={onBlur}
+        autoFocus={autoFocus}
+        className={inputClassName}
         onKeyDown={(e) => {
-          if (!open || suggestions.length === 0) return;
+          if (!open || suggestions.length === 0) {
+            onKeyDown?.(e);
+            return;
+          }
           if (e.key === "ArrowDown") {
             e.preventDefault();
             setActiveIndex((i) => (i + 1) % suggestions.length);
@@ -82,7 +103,7 @@ export function SymbolSearchInput({
         <ul
           id={listId}
           role="listbox"
-          className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-[var(--color-card-border)] bg-[var(--color-background)] py-1 font-sans shadow-lg"
+          className="absolute z-50 mt-1 max-h-56 w-full min-w-[18rem] overflow-auto rounded-md border border-[var(--color-card-border)] bg-[var(--color-background)] py-1 font-sans shadow-lg"
         >
           {suggestions.map((item, i) => (
             <li
