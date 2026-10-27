@@ -1,0 +1,3 @@
+# bash 腳本一律用 LF：Windows 上 checkout（含 CI 的 windows runner）預設會轉成
+# CRLF，bash 讀到行尾的 \r 會直接失敗。
+*.sh text eol=lf
