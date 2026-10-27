@@ -1,4 +1,5 @@
 import { normalizeCurrencyCode } from "@/lib/fx-rates";
+import { writeSetting } from "@/lib/persisted-settings";
 import { parseJsonSafe } from "@/lib/utils";
 
 export const DEFAULT_CURRENCIES = ["TWD", "USD"] as const;
@@ -44,7 +45,7 @@ export function saveCustomCurrencies(codes: string[]): void {
   const custom = codes
     .map((c) => normalizeCurrencyCode(c))
     .filter((c) => c.length >= 2 && c.length <= 8 && !isDefaultCurrency(c));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...new Set(custom)]));
+  writeSetting(STORAGE_KEY, [...new Set(custom)]);
 }
 
 export function addCustomCurrency(code: string): string[] {

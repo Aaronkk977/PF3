@@ -1,3 +1,4 @@
+import { writeSetting } from "@/lib/persisted-settings";
 import { parseJsonSafe } from "@/lib/utils";
 
 export type ThemeId = "cyberpunk" | "monochrome" | "noir";
@@ -44,7 +45,7 @@ export function loadSettings(): AppSettings {
 }
 
 export function saveSettings(settings: AppSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  writeSetting(STORAGE_KEY, settings);
 }
 
 export function applySettingsToDocument(settings: AppSettings): void {

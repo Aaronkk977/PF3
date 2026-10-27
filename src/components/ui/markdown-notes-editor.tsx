@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Columns2, Eye, Pencil } from "lucide-react";
 import { MarkdownPreview } from "@/components/ui/markdown-preview";
+import { writeSetting } from "@/lib/persisted-settings";
 import { cn } from "@/lib/utils";
 
 type EditorMode = "edit" | "split" | "preview";
@@ -76,7 +77,7 @@ export function MarkdownNotesEditor({
 
   function setMode(next: EditorMode) {
     setModeState(next);
-    if (typeof window !== "undefined") window.localStorage.setItem(MODE_STORAGE_KEY, next);
+    writeSetting(MODE_STORAGE_KEY, next);
   }
 
   // 同步顯示模式下，編輯框跟預覽框的高度要一致（取兩者實際內容較高的那個），

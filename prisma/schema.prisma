@@ -228,6 +228,14 @@ model AppMaintenance {
   lastRunAt DateTime?
 }
 
+/// 使用者設定（主題、配色、各頁篩選與排序…），key 見 src/lib/setting-keys.ts，
+/// value 為 JSON 字串。以前只存在瀏覽器 localStorage，換埠號就讀不到。
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @default(now())
+}
+
 model PriceCache {
   id        String   @id @default(cuid())
   symbol    String

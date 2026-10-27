@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { writeSetting } from "@/lib/persisted-settings";
 import { cn } from "@/lib/utils";
 
 const WIDTH_STORAGE_KEY = "notes-drawer-width";
@@ -68,7 +69,7 @@ export function Drawer({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       setWidth((w) => {
-        window.localStorage.setItem(WIDTH_STORAGE_KEY, String(w));
+        writeSetting(WIDTH_STORAGE_KEY, String(w));
         return w;
       });
     }

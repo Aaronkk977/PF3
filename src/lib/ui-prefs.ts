@@ -5,6 +5,7 @@ import {
   normalizeCustomPresets,
   type PerformancePeriodPreset,
 } from "@/lib/performance-period-presets";
+import { writeSetting } from "@/lib/persisted-settings";
 import { parseJsonSafe } from "@/lib/utils";
 
 export const HOLDINGS_PREFS_KEY = "portfolio-holdings-prefs";
@@ -126,9 +127,9 @@ function readJson<T>(key: string): T | null {
   }
 }
 
+/** 寫進 localStorage 並存回資料庫（見 persisted-settings.ts） */
 function writeJson(key: string, value: unknown): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(key, JSON.stringify(value));
+  writeSetting(key, value);
 }
 
 function migrateLegacyFilters(parsed: LegacyHoldingsPrefs): HoldingsPrefs {
