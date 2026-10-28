@@ -811,6 +811,16 @@ export function HoldingsCategoriesPanel({
   const [error, setError] = useState<string | null>(null);
   const [watchlists, setWatchlists] = useState<WatchlistWithEntries[]>([]);
   const [gridRef, columns] = useGridColumnCount(!loading);
+  const detailRef = useRef<HTMLLIElement>(null);
+  /** 使用者點開（或剛建立）時才捲動；搜尋自動展開時不捲，免得搜尋框被捲走 */
+  const scrollToDetailRef = useRef(false);
+
+  // 展開區在畫面外（例如點了底部的類別）時，捲到看得到整個展開區為止
+  useEffect(() => {
+    if (!scrollToDetailRef.current || !expandedId) return;
+    scrollToDetailRef.current = false;
+    detailRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [expandedId]);
 
   const watchlistOptions: WatchlistOption[] = watchlists.map((w) => ({
     id: w.id,
@@ -900,6 +910,7 @@ export function HoldingsCategoriesPanel({
 
   function toggle(id: string) {
     setError(null);
+    scrollToDetailRef.current = expandedId !== id;
     setExpandedId((current) => (current === id ? null : id));
   }
 
@@ -966,6 +977,7 @@ export function HoldingsCategoriesPanel({
         onCancel={() => setExpandedId(null)}
         onCreated={async (id) => {
           await refreshAfterChange();
+          scrollToDetailRef.current = true;
           setExpandedId(id);
         }}
       />
@@ -1052,7 +1064,12 @@ export function HoldingsCategoriesPanel({
                     )}
                   </li>
                   {index === detailAfterIndex && expandedTile && (
-                    <li className="col-span-full">{renderDetail(expandedTile)}</li>
+                    <li
+                      ref={detailRef}
+                      className="col-span-full scroll-mb-6 scroll-mt-24"
+                    >
+                      {renderDetail(expandedTile)}
+                    </li>
                   )}
                 </Fragment>
               ))}
