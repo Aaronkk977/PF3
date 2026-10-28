@@ -6,7 +6,7 @@ export type CachedPerformanceResult = Record<string, unknown> & {
   periodEnd: string;
 };
 
-const CACHE_VERSION = "v19";
+const CACHE_VERSION = "v20";
 
 export function buildPerformanceCacheKey(
   start: string,

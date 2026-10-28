@@ -1,6 +1,7 @@
 import {
   normalizePeriodDates,
   periodStartWithPriceLookback,
+  toLocalDateKey,
 } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
 import {
@@ -31,7 +32,7 @@ import {
 import { accountDataKey, STANDARD_ACCOUNTS } from "@/lib/standard-accounts";
 import { computePerformanceCalculation } from "@/lib/performance-calculation";
 import type { PerformanceCalculation } from "@/lib/performance-calculation";
-import { getHistoricalPrices } from "@/lib/yahoo";
+import { getHistoricalPrices, getQuote } from "@/lib/yahoo";
 
 function colorForAccountName(name: string): string {
   const std = STANDARD_ACCOUNTS.find((s) => s.name === name);
@@ -169,6 +170,38 @@ export async function getTodayPortfolioChange(): Promise<{
     todayChange: summary.todayChange,
     todayChangePct: summary.todayChangePct,
   };
+}
+
+/**
+ * 基準的日線，今天沒有 K 線時補上即時報價。
+ *
+ * 組合曲線在 simulateValueDays 裡會對「今天沒 K 線」的標的打即時報價，
+ * 基準若只吃日線，盤中（Yahoo 今天那根常是 close:null 被跳過）就會停在
+ * 前一天，圖上看起來只有自己的組合在動、基準線完全不更新。這裡套同一套規則。
+ */
+async function getBenchmarkBars(
+  symbol: string,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ date: string; close: number }[]> {
+  const bars = await getHistoricalPrices(
+    symbol,
+    periodStartWithPriceLookback(periodStart),
+    periodEnd,
+  );
+  const todayKey = toLocalDateKey(new Date());
+  if (toLocalDateKey(periodEnd) < todayKey) return bars;
+  if (bars.some((b) => b.date === todayKey && b.close > 0)) return bars;
+  try {
+    const quote = await getQuote(symbol);
+    if (quote.stale || !(quote.price > 0)) return bars;
+    return [
+      ...bars.filter((b) => b.date !== todayKey),
+      { date: todayKey, close: quote.price },
+    ];
+  } catch {
+    return bars;
+  }
 }
 
 export async function getPerformance(
@@ -322,6 +355,7 @@ export async function getPerformance(
   const { todayChange, todayChangePct } = await getTodayPortfolioChange();
 
   const benchmarkResults: BenchmarkComparison[] = [];
+  const barsBySymbol = new Map<string, { date: string; close: number }[]>();
 
   for (let i = 0; i < benchmarkSymbols.length; i++) {
     const symbol = benchmarkSymbols[i];
@@ -329,11 +363,8 @@ export async function getPerformance(
       `基準行情：${symbol}…`,
       55 + Math.round(((i + 1) / Math.max(benchmarkSymbols.length, 1)) * 25),
     );
-    const bars = await getHistoricalPrices(
-      symbol,
-      periodStartWithPriceLookback(periodStart),
-      periodEnd,
-    );
+    const bars = await getBenchmarkBars(symbol, periodStart, periodEnd);
+    barsBySymbol.set(symbol, bars);
     const benchPoints = buildForwardFilledCloseSeries(
       bars,
       periodStart,
@@ -388,11 +419,9 @@ export async function getPerformance(
 
   if (benchmarkSymbols.length > 0) {
     const primaryBench = benchmarkSymbols[0]!;
-    const benchBars = await getHistoricalPrices(
-      primaryBench,
-      periodStartWithPriceLookback(periodStart),
-      periodEnd,
-    );
+    const benchBars =
+      barsBySymbol.get(primaryBench) ??
+      (await getBenchmarkBars(primaryBench, periodStart, periodEnd));
     const benchFilled = buildForwardFilledCloseSeries(
       benchBars,
       periodStart,
