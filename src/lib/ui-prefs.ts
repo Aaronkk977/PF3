@@ -376,3 +376,56 @@ export function loadPerformancePrefs(): PerformancePrefs | null {
 export function savePerformancePrefs(prefs: PerformancePrefs): void {
   writeJson(PERFORMANCE_PREFS_KEY, prefs);
 }
+
+// ── 分析頁頁籤與已實現損益頁 ────────────────────────────────────────────────
+
+export const ANALYSIS_PREFS_KEY = "portfolio-analysis-prefs";
+
+export type AnalysisTab = "performance" | "trades";
+
+export type TradesPnlFilter = "all" | "win" | "loss";
+
+export type TradesSortKey =
+  | "date"
+  | "symbol"
+  | "accountName"
+  | "holdingDays"
+  | "costBasisTwd"
+  | "proceedsTwd"
+  | "realizedPnl"
+  | "realizedPnlPct"
+  | "irr";
+
+export type TradesPrefs = {
+  start?: string;
+  end?: string;
+  activePeriodPresetId?: string | null;
+  accountIds?: string[];
+  granularity?: "week" | "month" | "quarter" | "year";
+  pnlFilter?: TradesPnlFilter;
+  sortKey?: TradesSortKey | null;
+  sortDir?: "asc" | "desc" | null;
+};
+
+export type AnalysisPrefs = {
+  activeTab?: AnalysisTab;
+  trades?: TradesPrefs;
+};
+
+export function loadAnalysisPrefs(): AnalysisPrefs {
+  const parsed = readJson<AnalysisPrefs>(ANALYSIS_PREFS_KEY);
+  return parsed && typeof parsed === "object" ? parsed : {};
+}
+
+export function saveAnalysisTab(activeTab: AnalysisTab): void {
+  writeJson(ANALYSIS_PREFS_KEY, { ...loadAnalysisPrefs(), activeTab });
+}
+
+/** 只更新傳入的欄位，保留其他已存的已實現損益頁設定 */
+export function updateTradesPrefs(patch: TradesPrefs): void {
+  const current = loadAnalysisPrefs();
+  writeJson(ANALYSIS_PREFS_KEY, {
+    ...current,
+    trades: { ...current.trades, ...patch },
+  });
+}

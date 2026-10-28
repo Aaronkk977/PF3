@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { PerformanceClient } from "@/components/portfolio/performance-client";
 import { TradesClient } from "@/components/portfolio/trades-client";
 import type { BenchmarkRecord } from "@/lib/benchmarks";
+import {
+  loadAnalysisPrefs,
+  saveAnalysisTab,
+  type AnalysisTab,
+} from "@/lib/ui-prefs";
 
 type AccountOption = {
   id: string;
@@ -13,22 +18,13 @@ type AccountOption = {
   cash: number;
 };
 
-type AnalysisTab = "performance" | "trades";
-
-const TAB_STORAGE_KEY = "pp-analysis-tab";
-
 const TABS: { id: AnalysisTab; label: string }[] = [
   { id: "performance", label: "績效曲線" },
   { id: "trades", label: "已實現損益" },
 ];
 
 function loadSavedTab(): AnalysisTab {
-  try {
-    const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
-    return saved === "trades" ? "trades" : "performance";
-  } catch {
-    return "performance";
-  }
+  return loadAnalysisPrefs().activeTab === "trades" ? "trades" : "performance";
 }
 
 export function AnalysisClient({
@@ -44,7 +40,7 @@ export function AnalysisClient({
   defaultEnd: string;
   portfolioEarliest: string;
 }) {
-  // SSR 一律先渲染預設頁籤，掛載後再讀 sessionStorage 還原（避免 hydration mismatch）
+  // SSR 一律先渲染預設頁籤，掛載後再讀已存的頁籤還原（避免 hydration mismatch）
   const [activeTab, setActiveTab] = useState<AnalysisTab>("performance");
 
   useEffect(() => {
@@ -53,11 +49,7 @@ export function AnalysisClient({
 
   function switchTab(tab: AnalysisTab) {
     setActiveTab(tab);
-    try {
-      sessionStorage.setItem(TAB_STORAGE_KEY, tab);
-    } catch {
-      // sessionStorage unavailable — tab just won't persist
-    }
+    saveAnalysisTab(tab);
   }
 
   return (

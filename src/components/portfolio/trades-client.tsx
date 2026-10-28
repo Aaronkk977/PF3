@@ -13,10 +13,17 @@ import { Input } from "@/components/ui/input";
 import { useChartTheme } from "@/hooks/use-chart-theme";
 import { resolveAccountSwatchColor } from "@/lib/chart-palette";
 import { normalizePeriodRange } from "@/lib/date-keys";
-import type { PerformancePeriodPreset } from "@/lib/performance-period-presets";
 import {
+  syncPeriodEndToToday,
+  type PerformancePeriodPreset,
+} from "@/lib/performance-period-presets";
+import {
+  loadAnalysisPrefs,
   loadCustomPeriodPresets,
   loadPerformancePrefs,
+  updateTradesPrefs,
+  type TradesPnlFilter,
+  type TradesSortKey,
 } from "@/lib/ui-prefs";
 import {
   tradesGranularityLabel,
@@ -48,18 +55,9 @@ type AccountOption = {
   color: string;
 };
 
-type PnlFilter = "all" | "win" | "loss";
+type PnlFilter = TradesPnlFilter;
 
-type TradeSortKey =
-  | "date"
-  | "symbol"
-  | "accountName"
-  | "holdingDays"
-  | "costBasisTwd"
-  | "proceedsTwd"
-  | "realizedPnl"
-  | "realizedPnlPct"
-  | "irr";
+type TradeSortKey = TradesSortKey;
 
 type SortDir = "asc" | "desc";
 
@@ -68,6 +66,7 @@ type SortDir = "asc" | "desc";
 type TradesCacheSnapshot = {
   start: string;
   end: string;
+  presetId?: string | null;
   accountIds: string[];
   granularity: TradesPeriodGranularity;
   report: TradesReport;
@@ -86,6 +85,68 @@ const GRANULARITY_OPTIONS: {
   { value: "quarter", label: "每季" },
   { value: "year", label: "每年" },
 ];
+
+type TradesFilters = {
+  start: string;
+  end: string;
+  presetId: string | null;
+  accountIds: string[];
+  granularity: TradesPeriodGranularity;
+  pnlFilter: PnlFilter;
+  sortKey: TradeSortKey | null;
+  sortDir: SortDir | null;
+};
+
+/** 開頁時的篩選：本次開啟中已查過就沿用畫面快照（最精確），否則讀已存的
+ *  已實現損益頁設定，沒存過才借用績效頁的期間與帳戶。期間若已過期，依預設
+ *  按鈕重新套用到今天。 */
+function initialFilters(
+  cached: TradesCacheSnapshot | null,
+  accounts: AccountOption[],
+  defaultStart: string,
+  defaultEnd: string,
+  customPresets: PerformancePeriodPreset[],
+  portfolioEarliest: string,
+): TradesFilters {
+  const validAccountIds = (ids: string[] | undefined) =>
+    ids?.filter((id) => accounts.some((a) => a.id === id)) ?? [];
+  const allAccountIds = accounts.map((a) => a.id);
+
+  if (cached) {
+    const ids = validAccountIds(cached.accountIds);
+    return {
+      start: cached.start,
+      end: cached.end,
+      presetId: cached.presetId ?? null,
+      accountIds: ids.length ? ids : allAccountIds,
+      granularity: cached.granularity,
+      pnlFilter: cached.pnlFilter,
+      sortKey: cached.sortKey,
+      sortDir: cached.sortDir,
+    };
+  }
+
+  const saved = loadAnalysisPrefs().trades;
+  const perf = saved ? null : loadPerformancePrefs();
+  const period = syncPeriodEndToToday(
+    saved?.start ?? perf?.start ?? defaultStart,
+    saved?.end ?? perf?.end ?? defaultEnd,
+    saved ? (saved.activePeriodPresetId ?? null) : null,
+    customPresets,
+    portfolioEarliest,
+  );
+  const ids = validAccountIds(saved?.accountIds ?? perf?.accountIds);
+  return {
+    start: period.start,
+    end: period.end,
+    presetId: period.presetId,
+    accountIds: ids.length ? ids : allAccountIds,
+    granularity: saved?.granularity ?? "month",
+    pnlFilter: saved?.pnlFilter ?? "all",
+    sortKey: saved && saved.sortKey !== undefined ? saved.sortKey : "date",
+    sortDir: saved && saved.sortDir !== undefined ? saved.sortDir : "desc",
+  };
+}
 
 function toggleInList<T>(list: T[], item: T): T[] {
   return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
@@ -124,57 +185,66 @@ export function TradesClient({
   const [cached] = useState<TradesCacheSnapshot | null>(() =>
     readClientCache<TradesCacheSnapshot>(PAGE_CACHE_KEYS.trades),
   );
-  const [start, setStart] = useState(cached?.start ?? defaultStart);
-  const [end, setEnd] = useState(cached?.end ?? defaultEnd);
-  const [granularity, setGranularity] = useState<TradesPeriodGranularity>(
-    cached?.granularity ?? "month",
+  // 本元件只在 Analysis 頁掛載後才切到此頁籤時渲染（不經 SSR），可以直接在
+  // 初始值讀 localStorage 裡的設定，第一次查詢就用上次的篩選。
+  const [customPeriodPresets, setCustomPeriodPresets] = useState<
+    PerformancePeriodPreset[]
+  >(() => loadCustomPeriodPresets(loadPerformancePrefs()));
+  const [initial] = useState(() =>
+    initialFilters(
+      cached,
+      accounts,
+      defaultStart,
+      defaultEnd,
+      customPeriodPresets,
+      portfolioEarliest,
+    ),
   );
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() => {
-    const cachedIds = cached?.accountIds?.filter((id) =>
-      accounts.some((a) => a.id === id),
-    );
-    if (cachedIds?.length) return cachedIds;
-    return accounts.map((a) => a.id);
-  });
+  const [start, setStart] = useState(initial.start);
+  const [end, setEnd] = useState(initial.end);
+  const [granularity, setGranularity] = useState<TradesPeriodGranularity>(
+    initial.granularity,
+  );
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
+    initial.accountIds,
+  );
   const [report, setReport] = useState<TradesReport | null>(
     cached?.report ?? null,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pnlFilter, setPnlFilter] = useState<PnlFilter>(
-    cached?.pnlFilter ?? "all",
-  );
+  const [pnlFilter, setPnlFilter] = useState<PnlFilter>(initial.pnlFilter);
   const [settingsExpanded, setSettingsExpanded] = useState(
     cached?.settingsExpanded ?? true,
   );
-  const [customPeriodPresets, setCustomPeriodPresets] = useState<
-    PerformancePeriodPreset[]
-  >([]);
   const [activePeriodPresetId, setActivePeriodPresetId] = useState<
     string | null
-  >(null);
-  const [sortKey, setSortKey] = useState<TradeSortKey | null>(
-    cached?.sortKey ?? "date",
-  );
-  const [sortDir, setSortDir] = useState<SortDir | null>(
-    cached?.sortDir ?? "desc",
-  );
+  >(initial.presetId);
+  const [sortKey, setSortKey] = useState<TradeSortKey | null>(initial.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir | null>(initial.sortDir);
 
+  // 篩選一改就存回資料庫（見 ui-prefs / persisted-settings），下次開程式還在
   useEffect(() => {
-    const prefs = loadPerformancePrefs();
-    setCustomPeriodPresets(loadCustomPeriodPresets(prefs));
-    // 若已經有本頁的快照，代表 start/end/accountIds 已經是使用者上次實際查詢
-    // 的精確狀態，比泛用的 performance 頁偏好設定更準確，不要覆蓋掉。
-    if (cached) return;
-    if (prefs?.start) setStart(prefs.start);
-    if (prefs?.end) setEnd(prefs.end);
-    if (prefs?.accountIds?.length) {
-      const valid = prefs.accountIds.filter((id) =>
-        accounts.some((a) => a.id === id),
-      );
-      if (valid.length > 0) setSelectedAccountIds(valid);
-    }
-  }, [accounts, cached]);
+    updateTradesPrefs({
+      start,
+      end,
+      activePeriodPresetId,
+      accountIds: selectedAccountIds,
+      granularity,
+      pnlFilter,
+      sortKey,
+      sortDir,
+    });
+  }, [
+    start,
+    end,
+    activePeriodPresetId,
+    selectedAccountIds,
+    granularity,
+    pnlFilter,
+    sortKey,
+    sortDir,
+  ]);
 
   const load = useCallback(async () => {
     if (selectedAccountIds.length === 0) {
@@ -207,6 +277,7 @@ export function TradesClient({
       writeClientCache<TradesCacheSnapshot>(PAGE_CACHE_KEYS.trades, {
         start: normalized.start,
         end: normalized.end,
+        presetId: activePeriodPresetId,
         accountIds: selectedAccountIds,
         granularity,
         report: json,
@@ -221,7 +292,16 @@ export function TradesClient({
     } finally {
       setLoading(false);
     }
-  }, [start, end, selectedAccountIds, granularity, sortKey, sortDir, pnlFilter]);
+  }, [
+    start,
+    end,
+    activePeriodPresetId,
+    selectedAccountIds,
+    granularity,
+    sortKey,
+    sortDir,
+    pnlFilter,
+  ]);
 
   useEffect(() => {
     void load();

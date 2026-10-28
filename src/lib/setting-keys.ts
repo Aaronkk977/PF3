@@ -13,6 +13,7 @@ export const SYNCED_SETTING_KEYS = [
   "portfolio-transactions-prefs",
   "portfolio-recent-instruments",
   "portfolio-performance-prefs",
+  "portfolio-analysis-prefs",
   "notes-drawer-width",
   "notes-editor-mode",
 ] as const;
