@@ -169,8 +169,9 @@ export function MarketClient({
   // 新增清單的橢圓輸入框：依文字內容量測寬度，讓輸入框像跟著文字長度伸縮
   useEffect(() => {
     if (!showNewList) return;
+    // 量測用的 span 已經含左右 padding，輸入框又是 border-box，只需多留游標的寬度
     const measured = newListMeasureRef.current?.offsetWidth ?? 0;
-    setNewListInputWidth(Math.max(NEW_LIST_MIN_WIDTH, measured + 28));
+    setNewListInputWidth(Math.max(NEW_LIST_MIN_WIDTH, measured + 2));
   }, [showNewList, newListName]);
 
   function persistWatchlistsToCache(next: WatchlistWithEntries[]) {
