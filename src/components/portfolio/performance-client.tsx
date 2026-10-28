@@ -25,9 +25,7 @@ import {
 import { accountDataKey } from "@/lib/standard-accounts";
 import { normalizePeriodRange, toLocalDateKey } from "@/lib/date-keys";
 import {
-  applyPeriodPreset,
-  mergePeriodPresets,
-  presetMatchesRange,
+  syncPeriodEndToToday as syncPeriodRangeToToday,
   type PerformancePeriodPreset,
 } from "@/lib/performance-period-presets";
 import {
@@ -170,31 +168,14 @@ export function PerformanceClient({
       rangeEnd: string,
       presetId: string | null,
       customPresets: PerformancePeriodPreset[],
-    ) => {
-      const today = toLocalDateKey(new Date());
-      if (rangeEnd >= today) {
-        return { start: rangeStart, end: rangeEnd, presetId };
-      }
-      const presets = mergePeriodPresets(customPresets);
-      const preset =
-        (presetId ? presets.find((p) => p.id === presetId) : null) ??
-        presets.find((p) =>
-          presetMatchesRange(p, rangeStart, rangeEnd, portfolioEarliest),
-        );
-      if (preset) {
-        const applied = applyPeriodPreset(preset, {
-          end: new Date(),
-          portfolioEarliest,
-        });
-        return { start: applied.start, end: applied.end, presetId: preset.id };
-      }
-      const normalized = normalizePeriodRange(rangeStart, today);
-      return {
-        start: normalized.start,
-        end: normalized.end,
-        presetId: null as string | null,
-      };
-    },
+    ) =>
+      syncPeriodRangeToToday(
+        rangeStart,
+        rangeEnd,
+        presetId,
+        customPresets,
+        portfolioEarliest,
+      ),
     [portfolioEarliest],
   );
 

@@ -1,4 +1,4 @@
-import { toLocalDateKey } from "@/lib/date-keys";
+import { normalizePeriodRange, toLocalDateKey } from "@/lib/date-keys";
 
 export type PeriodPresetUnit =
   | "days"
@@ -125,6 +125,36 @@ export function presetMatchesRange(
     portfolioEarliest,
   });
   return applied.start === start && applied.end === end;
+}
+
+/** 存下來的期間若結束日已過：屬於某個預設（或對得上某個預設）就以今天重新
+ *  套用該預設，否則只把結束日延到今天。 */
+export function syncPeriodEndToToday(
+  rangeStart: string,
+  rangeEnd: string,
+  presetId: string | null,
+  customPresets: PerformancePeriodPreset[],
+  portfolioEarliest?: string,
+): { start: string; end: string; presetId: string | null } {
+  const today = toLocalDateKey(new Date());
+  if (rangeEnd >= today) {
+    return { start: rangeStart, end: rangeEnd, presetId };
+  }
+  const presets = mergePeriodPresets(customPresets);
+  const preset =
+    (presetId ? presets.find((p) => p.id === presetId) : null) ??
+    presets.find((p) =>
+      presetMatchesRange(p, rangeStart, rangeEnd, portfolioEarliest),
+    );
+  if (preset) {
+    const applied = applyPeriodPreset(preset, {
+      end: new Date(),
+      portfolioEarliest,
+    });
+    return { start: applied.start, end: applied.end, presetId: preset.id };
+  }
+  const normalized = normalizePeriodRange(rangeStart, today);
+  return { start: normalized.start, end: normalized.end, presetId: null };
 }
 
 export function normalizeCustomPresets(
