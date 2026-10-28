@@ -39,6 +39,16 @@ function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/** 往上找最近的捲動容器（overflow-y 是 auto/scroll 即可，不管現在有沒有溢出） */
+function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let node = el.parentElement;
+  while (node) {
+    if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 /** 游標在最後面時（連續打字／換行）才自動跟著往下捲，避免編輯文件中段時被強制跳走 */
 function followCaretScroll(ta: HTMLTextAreaElement) {
   if (ta.selectionStart !== ta.value.length) return;
@@ -54,6 +64,7 @@ export function MarkdownNotesEditor({
   placeholder = "支援 Markdown：標題、清單、連結、程式碼區塊…",
   minHeight = "14rem",
   isNewNote = false,
+  fillToBottom = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -61,6 +72,8 @@ export function MarkdownNotesEditor({
   minHeight?: string;
   /** 新建立的筆記固定從「同步顯示」開始，不套用使用者之前切換過的模式 */
   isNewNote?: boolean;
+  /** 內容少的時候也把框撐到外層捲動容器的底部（例如筆記抽屜），而不是只有 minHeight 那麼高 */
+  fillToBottom?: boolean;
 }) {
   const [mode, setModeState] = useState<EditorMode>(() => (isNewNote ? "split" : readStoredMode()));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -86,9 +99,20 @@ export function MarkdownNotesEditor({
   useEffect(() => {
     const ta = textareaRef.current;
     const preview = previewRef.current;
+    const first = ta ?? preview;
+    const scroller = fillToBottom && first ? findScrollParent(first) : null;
+
+    // 從框的頂端到捲動容器底部（扣掉下 padding）的距離，以捲動到最上面時為準
+    function spaceToBottom(): number {
+      if (!scroller || !first) return 0;
+      const containerRect = scroller.getBoundingClientRect();
+      const offsetTop = first.getBoundingClientRect().top - containerRect.top + scroller.scrollTop;
+      const paddingBottom = parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+      return Math.floor(scroller.clientHeight - paddingBottom - offsetTop);
+    }
 
     function measureAndSync() {
-      let target = 0;
+      let target = spaceToBottom();
       if (ta) {
         ta.style.height = "auto";
         target = Math.max(target, ta.scrollHeight);
@@ -105,15 +129,16 @@ export function MarkdownNotesEditor({
     measureAndSync();
 
     // 抽屜寬度可拖曳調整時換行寬度跟著變，兩個框都要重新量測避免高度對不上
-    const observers = [ta, preview]
-      .filter((el): el is HTMLTextAreaElement | HTMLDivElement => el != null)
+    // 視窗高度變了（scroller 跟著變）也要重新撐到底
+    const observers = [ta, preview, scroller]
+      .filter((el): el is HTMLElement => el != null)
       .map((el) => {
         const observer = new ResizeObserver(measureAndSync);
         observer.observe(el);
         return observer;
       });
     return () => observers.forEach((o) => o.disconnect());
-  }, [value, mode]);
+  }, [value, mode, fillToBottom]);
 
   // Enter 換行後游標位置：用 useEffect 等 value 真的更新到 DOM 後再校正，
   // 比 requestAnimationFrame 準（不會受渲染排程時機影響）。

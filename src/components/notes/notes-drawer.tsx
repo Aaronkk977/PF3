@@ -38,6 +38,8 @@ type NoteKindOption = { id: string; name: string };
 
 type AutosaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 
+const UNTITLED_NOTE_TITLE = "無標題筆記";
+
 type FormState = {
   title: string;
   content: string;
@@ -106,6 +108,9 @@ export function NotesDrawer() {
   const [form, setForm] = useState<FormState>(emptyForm(""));
   const [saving, setSaving] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
+  // 手動存檔時欄位不齊全的提示；不用 alert()，因為 Electron 的原生對話框關掉後
+  // 視窗會失去鍵盤焦點，看起來就像整個編輯器卡住打不了字。
+  const [saveHint, setSaveHint] = useState<string | null>(null);
   const lastSavedSnapshotRef = useRef<string>("");
 
   const [filterKind, setFilterKind] = useState("");
@@ -187,6 +192,12 @@ export function NotesDrawer() {
     if (viewMode !== "editor") return;
     const dirty = JSON.stringify(form) !== lastSavedSnapshotRef.current;
     if (!dirty) return;
+    setSaveHint(null);
+    // 內容或類型還沒填時不會真的存，就別一直顯示「編輯中…」
+    if (!form.content.trim() || !form.kind) {
+      setAutosaveStatus("idle");
+      return;
+    }
     setAutosaveStatus("pending");
     const timer = window.setTimeout(() => {
       void performSave();
@@ -233,6 +244,7 @@ export function NotesDrawer() {
     setEditingId(null);
     setManagingKinds(false);
     setAutosaveStatus("idle");
+    setSaveHint(null);
   }
 
   async function addKind() {
@@ -273,12 +285,13 @@ export function NotesDrawer() {
    *  儲存要「安靜」的地方，只有手動按存檔（manualSave）才會跳警告。存完不會
    *  離開編輯畫面，讓自動儲存不會打斷正在寫的東西。 */
   async function performSave(): Promise<boolean> {
-    if (!form.title.trim() || !form.content.trim() || !form.kind) return false;
+    if (!form.content.trim() || !form.kind) return false;
     setSaving(true);
     setAutosaveStatus("saving");
     try {
       const payload = {
-        title: form.title.trim(),
+        // 標題留白就用輸入框 placeholder 的「無標題筆記」存
+        title: form.title.trim() || UNTITLED_NOTE_TITLE,
         content: form.content.trim(),
         kind: form.kind,
         noteDate: form.noteDate,
@@ -318,16 +331,17 @@ export function NotesDrawer() {
     }
   }
 
-  /** 手動按存檔：不齊全的話跳警告（跟以前一樣），存完留在編輯畫面，不跳走 */
+  /** 手動按存檔：不齊全的話在標頭顯示提示，存完留在編輯畫面，不跳走 */
   async function manualSave() {
-    if (!form.title.trim() || !form.content.trim()) {
-      alert("標題與內容必填");
+    if (!form.content.trim()) {
+      setSaveHint("內容必填");
       return;
     }
     if (!form.kind) {
-      alert("請選擇筆記類型");
+      setSaveHint("請選擇筆記類型");
       return;
     }
+    setSaveHint(null);
     await performSave();
   }
 
@@ -336,7 +350,7 @@ export function NotesDrawer() {
     if (viewMode !== "editor") return;
     const dirty = JSON.stringify(form) !== lastSavedSnapshotRef.current;
     if (!dirty) return;
-    if (!form.title.trim() || !form.content.trim() || !form.kind) return;
+    if (!form.content.trim() || !form.kind) return;
     await performSave();
   }
 
@@ -452,7 +466,11 @@ export function NotesDrawer() {
   const headerRight =
     viewMode === "editor" ? (
       <>
-        {autosaveStatus !== "idle" && (
+        {saveHint ? (
+          <span className="mr-1 text-[10px] text-[var(--color-negative)]" aria-live="polite">
+            {saveHint}
+          </span>
+        ) : autosaveStatus !== "idle" && (
           <span className="mr-1 text-[10px] text-[var(--color-muted)]" aria-live="polite">
             {autosaveStatus === "pending" && "編輯中…"}
             {autosaveStatus === "saving" && "儲存中…"}
@@ -593,7 +611,7 @@ export function NotesDrawer() {
             type="text"
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-            placeholder="無標題筆記"
+            placeholder={UNTITLED_NOTE_TITLE}
             className="w-full border-0 bg-transparent p-0 text-2xl font-semibold text-[var(--color-foreground)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-0"
           />
 
@@ -698,6 +716,7 @@ export function NotesDrawer() {
             placeholder={"## 論點\n- ...\n\n## 風險\n- ..."}
             minHeight="12rem"
             isNewNote={editorIsNewNote}
+            fillToBottom
           />
         </div>
       )}
