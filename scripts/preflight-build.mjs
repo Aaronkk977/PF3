@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, rmSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { join } from "path";
 
@@ -162,4 +162,17 @@ if (locked.length > 0) {
     // 列不出來就算了，訊息本身已經夠指路
   }
   process.exit(1);
+}
+
+// `prisma generate` 遇到 DLL 被鎖時會留下寫到一半的 query_engine-windows.dll.node.tmpXXXX
+// （每顆 21MB），之後永遠不會被清掉，而且會被 tracing 一路帶進 standalone 跟安裝檔。
+const prismaClientDir = join(root, "node_modules", ".prisma", "client");
+if (existsSync(prismaClientDir)) {
+  const stale = readdirSync(prismaClientDir).filter((f) =>
+    /^query_engine-windows\.dll\.node\.tmp\d+$/.test(f),
+  );
+  for (const f of stale) rmSync(join(prismaClientDir, f), { force: true });
+  if (stale.length > 0) {
+    console.log(`Removed ${stale.length} stale Prisma engine temp file(s).`);
+  }
 }

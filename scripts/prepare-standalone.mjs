@@ -1,4 +1,12 @@
-import { cpSync, existsSync, mkdirSync, rmSync, renameSync } from "fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  renameSync,
+  statSync,
+} from "fs";
 import { join } from "path";
 import os from "os";
 
@@ -25,6 +33,33 @@ function copyDir(src, dest, label) {
 
 copyDir(join(root, ".next", "static"), join(standaloneDir, ".next", "static"), "static");
 copyDir(join(root, "public"), join(standaloneDir, "public"), "public");
+
+// next.config 的 outputFileTracingIncludes 把整個 Prisma 資料夾帶進來（excludes
+// 管不到 include 進來的檔案），裡面有 app 用不到的大檔：其他平台的原生引擎、
+// generate 失敗留下的 .tmp 引擎、其他資料庫的 wasm runtime。app 只在 Windows
+// 用 SQLite + 原生引擎，這些刪掉可以少複製、少壓縮幾十到幾百 MB。
+function pruneDir(dir, pattern) {
+  if (!existsSync(dir)) return 0;
+  let bytes = 0;
+  for (const f of readdirSync(dir)) {
+    if (!pattern.test(f)) continue;
+    const p = join(dir, f);
+    bytes += statSync(p).size;
+    rmSync(p, { force: true });
+  }
+  return bytes;
+}
+
+const pruned =
+  pruneDir(
+    join(standaloneDir, "node_modules", ".prisma", "client"),
+    /^libquery_engine-|\.dll\.node\.tmp\d+$/,
+  ) +
+  pruneDir(
+    join(standaloneDir, "node_modules", "@prisma", "client", "runtime"),
+    /\.(mysql|postgresql|sqlserver|cockroachdb)\.(js|mjs|wasm)$|\.(mysql|postgresql|sqlserver|cockroachdb)\.wasm-base64\.(js|mjs)$/,
+  );
+console.log(`Pruned ${(pruned / 1024 / 1024).toFixed(1)} MB of unused Prisma files.`);
 
 console.log("Standalone bundle ready.");
 
