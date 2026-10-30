@@ -76,6 +76,7 @@ export function InstrumentDetailClient({
   accounts,
   pnlSummary,
   chartType = "candlestick",
+  lineOverlay,
   relatedNotes,
 }: {
   instrument: Instrument;
@@ -92,6 +93,8 @@ export function InstrumentDetailClient({
   accounts: { id: string; name: string; currency: string }[];
   pnlSummary: InstrumentPnlSummary;
   chartType?: "candlestick" | "line";
+  /** 折線圖疊加的對照線（左側刻度），例如 VIX／融資頁的加權指數 */
+  lineOverlay?: { label: string; ohlc: OhlcData[] };
   relatedNotes: RelatedNote[];
 }) {
   const { open: openNote, openNewNoteFor } = useNotesDrawer();
@@ -518,7 +521,27 @@ export function InstrumentDetailClient({
                 載入圖表資料中…
               </div>
             ) : chartType === "line" ? (
-              <SimpleLineChart data={ohlc} />
+              <>
+                <SimpleLineChart data={ohlc} overlay={lineOverlay?.ohlc} />
+                {lineOverlay && lineOverlay.ohlc.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-muted)]">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        className="inline-block h-0.5 w-5 rounded-full bg-[var(--color-primary)]"
+                        aria-hidden
+                      />
+                      {instrument.symbol}（右軸）
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        className="inline-block h-px w-5 rounded-full bg-[var(--color-muted)]"
+                        aria-hidden
+                      />
+                      {lineOverlay.label}（左軸）
+                    </span>
+                  </div>
+                )}
+              </>
             ) : (
               <CandlestickChart data={ohlc} transactions={transactions} symbol={instrument.symbol} />
             )}

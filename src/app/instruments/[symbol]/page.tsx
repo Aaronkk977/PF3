@@ -25,6 +25,7 @@ import {
   withoutDeprecatedTags,
 } from "@/lib/deprecated-tags";
 import { isCustomSeriesSymbol } from "@/lib/custom-series-symbols";
+import { TAIEX_SYMBOL } from "@/lib/market-data/taiex";
 import { toTransactionDateKey } from "@/lib/date-keys";
 import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { decodeSymbol, toNumber } from "@/lib/utils";
@@ -64,14 +65,21 @@ export default async function InstrumentPage({
   /** 初始載入一年日線；K 線圖往左滑時會自動 lazy-load 更早的歷史資料 */
   const start = new Date(end.getFullYear() - 1, end.getMonth(), end.getDate());
 
+  const isLineSeries = isCustomSeriesSymbol(symbol);
+
   let quote = null;
   let ohlc: Awaited<ReturnType<typeof getHistoricalPrices>> = [];
+  // VIX／融資這類自組序列，旁邊疊加權指數一起看
+  const taiexPromise = isLineSeries
+    ? getHistoricalPrices(TAIEX_SYMBOL, start, end).catch(() => [])
+    : Promise.resolve([]);
   try {
     quote = await getQuote(symbol);
     ohlc = await getHistoricalPrices(symbol, start, end);
   } catch {
     // Yahoo may fail offline
   }
+  const taiexOhlc = await taiexPromise;
 
   const hasHistoricalBars = ohlc.length >= 2;
   const weekChangePct = hasHistoricalBars
@@ -166,8 +174,6 @@ export default async function InstrumentPage({
     instrumentCurrency,
   );
 
-  const isLineSeries = isCustomSeriesSymbol(symbol);
-
   return (
     <Suspense fallback={<div className="text-sm text-[var(--color-muted)]">載入中…</div>}>
     <InstrumentDetailClient
@@ -194,6 +200,7 @@ export default async function InstrumentPage({
       accounts={accounts}
       pnlSummary={pnlSummary}
       chartType={isLineSeries ? "line" : "candlestick"}
+      lineOverlay={isLineSeries ? { label: "加權指數", ohlc: taiexOhlc } : undefined}
       relatedNotes={relatedNotes}
     />
     </Suspense>
