@@ -63,6 +63,27 @@ function sumCollateral(
   return total;
 }
 
+/** 期交所指數專區（indes/index.aspx/GetStockDayPrices）：回應的 d 是 JSON 字串，
+ *  TrendData 每筆 { Time: "YYYYMMDD", Price }。這裡的值是 13:45 指數，
+ *  不是月檔的收盤前 1 分鐘平均（通常差 0.1 點內）。回傳 YYYYMMDD → 值。 */
+export function parseVixIndexHistory(json: { d?: string }): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!json.d) return out;
+  let payload: { TrendData?: { Time?: string; Price?: number }[] };
+  try {
+    payload = JSON.parse(json.d);
+  } catch {
+    return out;
+  }
+  for (const row of payload.TrendData ?? []) {
+    if (!/^\d{8}$/.test(row.Time ?? "")) continue;
+    if (typeof row.Price === "number" && Number.isFinite(row.Price) && row.Price > 0) {
+      out.set(row.Time!, row.Price);
+    }
+  }
+  return out;
+}
+
 /** 證交所 MI_MARGN?selectType=ALL：第一張表是「信用交易統計」（融資金額），
  *  第二張是各股「融資融券彙總」（融資今日餘額，單位：交易單位＝1000 股）。 */
 export function parseTwseMarginAll(

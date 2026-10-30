@@ -42,6 +42,9 @@ auto-update, focused on fast local usage and clear performance analysis.
 **Market data**
 - Daily TWSE/TPEx snapshot sync with holiday cross-validation, incremental
   (skip already-synced dates) and parallelized for speed.
+- Custom series charted with TAIEX overlaid: Taiwan VIX (`VIXTWN`, official
+  TAIFEX closes; history back to the last 3 years), margin balance
+  (`TWMARGIN`) and market margin maintenance ratio (`TWMARGINRATIO`).
 
 **MCP trading review**
 - `scripts/mcp-server.ts` exposes a `get_trading_review` tool over MCP so
@@ -160,7 +163,13 @@ local database directly via the `get_trading_review` tool.
 ```powershell
 npm run market:sync              # today
 npm run market:sync:history -- 12   # backfill last 12 months
+npm run market:backfill-series -- 36  # Taiwan VIX + margin series, last 36 months
 ```
+
+Taiwan VIX: TAIFEX download pages keep only ~3 months, so older gaps are
+filled from the TAIFEX index page (last 3 years, 13:45 values); the last ~3
+months always use the official "last 1-minute average" closes. Margin backfill
+is slow (~20 min per year) and resumes where it stopped.
 
 ## Privacy & Git Safety
 

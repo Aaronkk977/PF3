@@ -8,6 +8,7 @@ import {
   parseTwseCloses,
   parseTwseMarginAll,
   parseVixDailyFile,
+  parseVixIndexHistory,
   parseVixMonthlyFile,
 } from "@/lib/market-series-parsers";
 
@@ -41,6 +42,26 @@ test("VIX 單日檔整天同一個值視為資料凍結", () => {
   const rows = Array.from({ length: 20 }, (_, i) => `20260730\t${11000000 + i * 1500}\t\t\t24.84`);
   rows.push("20260730\tLast 1 min AVG\t\t\t24.84");
   assert.equal(parseVixDailyFile(rows.join("\n")), null);
+});
+
+test("VIX 指數專區歷史：d 是 JSON 字串，略過壞列", () => {
+  const d = JSON.stringify({
+    TrendData: [
+      { Time: "20231031", Price: 17.07 },
+      { Time: "2023/11/01", Price: 16.62 },
+      { Time: "20231102", Price: 0 },
+      { Time: "20231103", Price: 15.15 },
+    ],
+  });
+  assert.deepEqual(
+    [...parseVixIndexHistory({ d })],
+    [
+      ["20231031", 17.07],
+      ["20231103", 15.15],
+    ],
+  );
+  assert.equal(parseVixIndexHistory({ d: "not json" }).size, 0);
+  assert.equal(parseVixIndexHistory({}).size, 0);
 });
 
 test("證交所融資：融資金額（仟元）與各股餘額（張）", () => {

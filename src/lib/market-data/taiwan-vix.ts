@@ -15,13 +15,19 @@ import {
 import { TAIWAN_VIX_SYMBOL } from "@/lib/custom-series-symbols";
 import { fetchWithShortTimeout } from "@/lib/http-fetch";
 import type { OhlcBar, QuoteResult } from "@/lib/market-data/yahoo-chart";
-import { parseVixDailyFile, parseVixMonthlyFile } from "@/lib/market-series-parsers";
+import {
+  parseVixDailyFile,
+  parseVixIndexHistory,
+  parseVixMonthlyFile,
+} from "@/lib/market-series-parsers";
 
 /** 台灣 VIX（VIXTWN）：Yahoo 沒有。即時值抓期交所 MIS；歷史日收盤用
  *  1. 期交所主站近 3 個月的月檔（一個檔案一整個月，最省請求）
  *  2. 主站當月的單日分鐘檔（月檔還沒更新到的最近幾天）
- *  官方收盤值一律是「收盤前 1 分鐘平均指數」。期交所只保留約 3 個月，
- *  更早的歷史只能靠 PriceCache 自己累積。
+ *  3. 期交所指數專區的歷史查詢（最近 3 年），只補資料庫裡還沒有的日期
+ *  官方收盤值是「收盤前 1 分鐘平均指數」；指數專區給的是 13:45 指數
+ *  （差 0.1 點內），所以只拿來補洞，月檔有的日期一律以月檔為準。
+ *  3 年以前的歷史期交所沒有免費提供。
  *
  *  不要再用 www.bq888.taifex.com.tw：舊版曾從那裡抓歷史，但它的資料是壞的
  *  （連續數週同一個值、0.51 這種不可能的點數，2026-07-01 與官方月檔差 12 點）。 */
@@ -34,6 +40,11 @@ const TAIWAN_VIX_QUOTE_LIST_URL =
 const MONTHLY_FILE_MONTHS = 4;
 /** 最近幾天的單日檔每次都重抓，蓋掉盤中存下來的即時快照 */
 const RECENT_DAYS_REFRESH = 7;
+const TAIFEX_INDEX_HISTORY_URL = `${TAIFEX_BASE}/indes/index.aspx/GetStockDayPrices`;
+/** 指數專區網頁標示「可查詢資料範圍為最近三年」 */
+const INDEX_HISTORY_YEARS = 3;
+/** 區間開頭缺超過這麼多天，才去指數專區補（連假不算缺） */
+const INDEX_HISTORY_GAP_DAYS = 10;
 
 export function isTaiwanVixSymbol(symbol: string): boolean {
   return symbol.trim().toUpperCase() === TAIWAN_VIX_SYMBOL;
@@ -63,6 +74,37 @@ async function fetchDailyClose(dateKey: string): Promise<number | null> {
     600,
   );
   return text ? parseVixDailyFile(text) : null;
+}
+
+const slashDate = (d: Date) => toLocalDateKey(d).replace(/-/g, "/");
+
+/** 指數專區的歷史查詢；範圍夾在網站允許的最近 3 年內 */
+async function fetchIndexHistory(start: Date, end: Date): Promise<Map<string, number>> {
+  // 結束日期是今天（含）以後會被拒絕：「結束日期不能大於或等於今天！」
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (end > yesterday) end = yesterday;
+  if (start > end) return new Map();
+  const res = await fetchWithShortTimeout(
+    TAIFEX_INDEX_HISTORY_URL,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        syid: "TAIWANVIX",
+        flag: "MS",
+        startDate: slashDate(start),
+        endDate: slashDate(end),
+      }),
+    },
+    FETCH_TIMEOUT_MS,
+  );
+  if (!res?.ok) return new Map();
+  try {
+    return parseVixIndexHistory(await res.json());
+  } catch {
+    return new Map();
+  }
 }
 
 /** 主站「分鐘檔」頁面列出的日期（當月，YYYYMMDD，降冪） */
@@ -129,6 +171,25 @@ export async function syncVixHistory(
     const value = await fetchDailyClose(k);
     if (value != null) official.set(k, value);
   });
+
+  // 區間開頭（月檔涵蓋不到的舊日期）缺一段時，從指數專區補洞。補過之後最早
+  // 一筆就在區間開頭附近，之後的同步不會再打這支。
+  const indexFrom = new Date();
+  indexFrom.setFullYear(indexFrom.getFullYear() - INDEX_HISTORY_YEARS);
+  indexFrom.setDate(indexFrom.getDate() + 1);
+  const indexStart = periodStart > indexFrom ? periodStart : indexFrom;
+  const earliestKnown = [...existing.keys(), ...official.keys()].sort()[0];
+  const gapLimitKey = compactKey(
+    new Date(indexStart.getTime() + INDEX_HISTORY_GAP_DAYS * 86_400_000),
+  );
+  if (indexStart < monthlyFrom && (earliestKnown == null || earliestKnown > gapLimitKey)) {
+    const history = await externalReadLimiter.run(() =>
+      fetchIndexHistory(indexStart, periodEnd),
+    );
+    for (const [k, v] of history) {
+      if (inRange(k) && !official.has(k) && !existing.has(k)) official.set(k, v);
+    }
+  }
 
   const toWrite = [...official].filter(([k, v]) => {
     const cached = existing.get(k);
