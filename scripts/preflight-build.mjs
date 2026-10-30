@@ -20,7 +20,8 @@ const pidFile = join(
  *  - `npm run electron:dev` 開的開發版
  *  - 從這個專案跑起來的 standalone server（launcher 或手動 node server.js）
  *  - Claude 的 portfolio MCP server（scripts/mcp-server.ts），它載入的就是
- *    node_modules 裡那顆 query engine */
+ *    node_modules 裡那顆 query engine
+ *  - 這個專案的 `npm run dev`（next dev） */
 const APP_EXE = "Portfolio Performance.exe";
 
 function shouldStop(proc) {
@@ -30,7 +31,18 @@ function shouldStop(proc) {
   if (proc.Name !== "node.exe") return false;
   return (
     /scripts\\mcp-server\.ts/.test(cmd) ||
-    /\.next\\standalone\\server\.js/.test(cmd)
+    /\.next\\standalone\\server\.js/.test(cmd) ||
+    isProjectNextServer(cmd)
+  );
+}
+
+/** 這個專案的 `next dev`／`next start`：它 fork 出來的 server 也會載入 query
+ *  engine，而且 dev 跟 build 共用 .next，不能同時跑 */
+function isProjectNextServer(cmd) {
+  if (!cmd.includes(root.toLowerCase())) return false;
+  return (
+    /next\\dist\\bin\\next"?\s+(dev|start)\b/.test(cmd) ||
+    /next\\dist\\server\\lib\\start-server\.js/.test(cmd)
   );
 }
 
@@ -89,6 +101,13 @@ function stopRunningApp() {
   if (stopped.some((p) => p.Name === APP_EXE || p.Name === "electron.exe")) {
     console.log("Closed the running Portfolio Performance app.");
   }
+  if (
+    stopped.some((p) =>
+      isProjectNextServer((p.CommandLine ?? "").replace(/\//g, "\\").toLowerCase()),
+    )
+  ) {
+    console.log("Stopped the running Next.js dev server (run `npm run dev` again after the build).");
+  }
   if (stopped.some((p) => /mcp-server/i.test(p.CommandLine ?? ""))) {
     console.log(
       "Stopped the portfolio MCP server (restart the Claude session to reconnect it).",
@@ -126,7 +145,7 @@ if (locked.length > 0) {
   console.error("Build aborted: Prisma query engine is locked by a running process.");
   for (const dll of locked) console.error(`  ${dll}`);
   console.error(
-    "Close the app and any `tsx scripts/mcp-server.ts` process (Claude Code's portfolio MCP server counts), then rebuild.",
+    "Close the app, `npm run dev`, and any `tsx scripts/mcp-server.ts` process (Claude Code's portfolio MCP server counts), then rebuild.",
   );
   try {
     const out = execFileSync(
