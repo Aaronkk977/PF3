@@ -288,6 +288,14 @@ export function TransactionForm({
     return `目前持有 ${currentHeldQty.toLocaleString("zh-TW")} 股，這筆賣出 ${qty.toLocaleString("zh-TW")} 股將超賣 ${overBy.toLocaleString("zh-TW")} 股`;
   }, [form.type, form.quantity, currentHeldQty]);
 
+  /** 賣出時數量欄的灰字提示（目前持股）；數量欄空白時按 Tab 直接帶入 */
+  const sellQtyHint = useMemo(() => {
+    if (form.type !== "SELL" || currentHeldQty == null) return null;
+    if (currentHeldQty <= 1e-7) return null;
+    // 碎股加總可能有浮點誤差，取到小數 6 位
+    return String(Math.round(currentHeldQty * 1e6) / 1e6);
+  }, [form.type, currentHeldQty]);
+
   useEffect(() => {
     if (isCashFlow || !effectiveSymbol || !form.date) return;
 
@@ -590,9 +598,25 @@ export function TransactionForm({
                     type="number"
                     step="any"
                     value={form.quantity}
+                    placeholder={sellQtyHint ?? undefined}
+                    title={sellQtyHint ? "按 Tab 帶入目前持股" : undefined}
                     onChange={(e) => {
                       feeTaxTouched.current = false;
                       setForm({ ...form, quantity: e.target.value });
+                    }}
+                    onKeyDown={(e) => {
+                      if (
+                        e.key !== "Tab" ||
+                        e.shiftKey ||
+                        !sellQtyHint ||
+                        form.quantity !== ""
+                      ) {
+                        return;
+                      }
+                      // 第一次 Tab 帶入持股並留在原欄位，再按一次才跳下一格
+                      e.preventDefault();
+                      feeTaxTouched.current = false;
+                      setForm((f) => ({ ...f, quantity: sellQtyHint }));
                     }}
                     required
                   />

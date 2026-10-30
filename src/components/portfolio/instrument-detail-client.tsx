@@ -845,7 +845,7 @@ export function InstrumentDetailClient({
         </Card>
       </PageSection>
 
-      <PageSection id="instrument-tags" title="類別" className="mt-8" navOrder={50}>
+      <PageSection id="instrument-tags" title="標籤" className="mt-8" navOrder={50}>
         <Card>
           <CardHeader>
             <CardTitle>標籤</CardTitle>

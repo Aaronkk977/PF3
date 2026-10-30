@@ -14,6 +14,14 @@
   --font-family-mono: var(--font-mono);
 }
 
+/* 隱藏頁面右側捲軸，捲動進度改由「本頁導覽」直線上的小圓點顯示 */
+html {
+  scrollbar-width: none;
+}
+html::-webkit-scrollbar {
+  display: none;
+}
+
 html {
   font-family: var(--font-sans);
   --font-sans:
