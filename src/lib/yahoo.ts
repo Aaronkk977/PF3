@@ -249,7 +249,7 @@ function applyTaiwanQuoteClose(
   };
 }
 
-/** 即時報價的請求內去重快取（詳見 spec.md）。
+/** 即時報價的請求內去重快取。
  *
  *  分析頁一次請求會為「整體」線、「全部帳戶」線、每個帳戶各自的線分別呼叫
  *  resolvePortfolioValueSeries——只要某檔股票被任一帳戶持有，它就必然同時
