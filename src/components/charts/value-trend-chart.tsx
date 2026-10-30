@@ -7,6 +7,7 @@ import {
   Customized,
   Legend,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -44,6 +45,23 @@ type CashFlowBarLayerProps = {
   yAxisMap?: Record<string, { scale: AxisScale }>;
 };
 
+/** 長條路徑：貼 0 軸那端為直角，只有外側端點圓角 */
+function flowBarPath(x: number, w: number, yBase: number, yEnd: number): string {
+  const h = Math.abs(yBase - yEnd);
+  // 圓角限制在寬度 35%、高度 1/2 以內，細長條才不會變成圓頭
+  const r = Math.min(3, w * 0.35, h / 2);
+  const d = yBase > yEnd ? r : -r;
+  return [
+    `M${x},${yBase}`,
+    `L${x},${yEnd + d}`,
+    `Q${x},${yEnd} ${x + r},${yEnd}`,
+    `L${x + w - r},${yEnd}`,
+    `Q${x + w},${yEnd} ${x + w},${yEnd + d}`,
+    `L${x + w},${yBase}`,
+    "Z",
+  ].join(" ");
+}
+
 function CashFlowBarLayer({
   rows,
   xAxisMap,
@@ -73,7 +91,7 @@ function CashFlowBarLayer({
       : 0;
   const slotW =
     bandwidth > 0 ? bandwidth : Math.max(6, 300 / Math.max(rows.length, 1));
-  const barW = Math.min(22, slotW * 0.75);
+  const barW = Math.max(3, Math.min(18, slotW * 0.7));
 
   return (
     <g className="cash-flow-bars">
@@ -81,41 +99,30 @@ function CashFlowBarLayer({
         const x0 = xAxis.scale(String(row.date));
         if (typeof x0 !== "number" || Number.isNaN(x0)) return null;
         const cx = x0 + (bandwidth > 0 ? bandwidth / 2 : 0);
+        const yBase = yAxis.scale(flowBaseline);
 
         if (typeof row.depositH === "number" && row.depositH > 0) {
-          const yBase = yAxis.scale(flowBaseline);
           const yTop = yAxis.scale(row.depositH);
-          const h = Math.abs(yBase - yTop);
-          if (h < 2) return null;
+          if (Math.abs(yBase - yTop) < 2) return null;
           return (
-            <rect
+            <path
               key={`dep-${row.date}`}
-              x={cx - barW / 2}
-              y={Math.min(yBase, yTop)}
-              width={barW}
-              height={h}
+              d={flowBarPath(cx - barW / 2, barW, yBase, yTop)}
               fill={depositColor}
-              fillOpacity={0.92}
-              rx={3}
+              fillOpacity={0.85}
             />
           );
         }
 
         if (typeof row.withdrawalH === "number" && row.withdrawalH < flowBaseline) {
-          const yBase = yAxis.scale(flowBaseline);
           const yLow = yAxis.scale(row.withdrawalH);
-          const h = Math.abs(yBase - yLow);
-          if (h < 2) return null;
+          if (Math.abs(yBase - yLow) < 2) return null;
           return (
-            <rect
+            <path
               key={`wd-${row.date}`}
-              x={cx - barW / 2}
-              y={Math.min(yBase, yLow)}
-              width={barW}
-              height={h}
+              d={flowBarPath(cx - barW / 2, barW, yBase, yLow)}
               fill={withdrawalColor}
-              fillOpacity={0.92}
-              rx={3}
+              fillOpacity={0.85}
             />
           );
         }
@@ -594,6 +601,15 @@ export function ValueTrendChart({
               );
             })}
             {hasCashFlows && (
+              <ReferenceLine
+                xAxisId="date"
+                yAxisId="value"
+                y={flowBaseline}
+                stroke="var(--color-muted)"
+                strokeOpacity={0.5}
+              />
+            )}
+            {hasCashFlows && (
               <Customized
                 component={(rawProps: unknown) => {
                   const props = rawProps as {
@@ -634,14 +650,14 @@ export function ValueTrendChart({
           <>
             <span className="inline-flex items-center gap-1">
               <span
-                className="inline-block h-2 w-2 rounded-sm"
+                className="inline-block h-2.5 w-1.5 rounded-t-[1px]"
                 style={{ background: depositColor }}
               />
               入金
             </span>
             <span className="inline-flex items-center gap-1">
               <span
-                className="inline-block h-2 w-2 rounded-sm"
+                className="inline-block h-2.5 w-1.5 rounded-t-[1px]"
                 style={{ background: withdrawalColor }}
               />
               出金
