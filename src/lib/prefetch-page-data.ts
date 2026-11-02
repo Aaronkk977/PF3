@@ -9,7 +9,20 @@ import {
 } from "@/lib/holdings-cache-client";
 import { pageRequestHeaders } from "@/lib/page-request-headers";
 import { parseResponseJson } from "@/lib/utils";
-import { loadHoldingsPrefs, loadPerformancePrefs } from "@/lib/ui-prefs";
+import {
+  loadDashboardPrefs,
+  loadHoldingsPrefs,
+  loadPerformancePrefs,
+} from "@/lib/ui-prefs";
+
+/** Overview 只顯示持股算出的總數，不載入追蹤清單 */
+export const OVERVIEW_DATA_URL = "/api/portfolio/dashboard?watchlist=none";
+
+/** Market 頁的資料網址：只替目前選中的追蹤清單抓報價，其他清單用快取 */
+export function marketDataUrl(listId?: string | null): string {
+  const id = listId ?? loadDashboardPrefs().activeWatchlistId;
+  return `/api/portfolio/dashboard?watchlist=${encodeURIComponent(id || "first")}`;
+}
 
 /** Holdings only on idle prefetch — transactions is heavy and can race Next dev compile. */
 const PREFETCH_TARGETS = [
@@ -158,7 +171,10 @@ export function prefetchPage(cacheKey: string, url: string): void {
 export const NAV_PREFETCH: Record<string, { cacheKey: string; url: string }> = {
   "/market": {
     cacheKey: PAGE_CACHE_KEYS.dashboard,
-    url: "/api/portfolio/dashboard",
+    // 每次讀都依當下選中的清單組網址
+    get url() {
+      return marketDataUrl();
+    },
   },
   "/holdings": {
     cacheKey: PAGE_CACHE_KEYS.holdings,

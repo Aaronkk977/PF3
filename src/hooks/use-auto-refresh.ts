@@ -7,7 +7,7 @@ import { AUTO_REFRESH_MS, shouldAutoRefresh } from "@/lib/auto-refresh";
 const CHECK_EVERY_MS = 30_000;
 
 /**
- * 頁面放著不動時，盤中每 5 分鐘自動重新載入（條件見 shouldAutoRefresh）。
+ * 頁面放著不動時，盤中每 3 分鐘自動重新載入（條件見 shouldAutoRefresh）。
  * 視窗縮小時停；切回前景時若已滿間隔就馬上補一次。
  * 報價實際要不要打 Yahoo 仍由伺服器的報價快取決定（lib/quote-freshness.ts）。
  */

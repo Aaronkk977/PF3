@@ -7,8 +7,17 @@ import {
   isBuiltinWatchlistName,
 } from "@/lib/watchlist-presets";
 import { ensureInstrument } from "@/lib/ensure-instrument";
-import { resolveInstrumentDisplayName } from "@/lib/instrument-display-name";
-import { getQuotes, getWeekChangePercents, type QuoteResult } from "@/lib/yahoo";
+import {
+  pickDisplayName,
+  resolveInstrumentDisplayName,
+} from "@/lib/instrument-display-name";
+import {
+  getCachedQuotes,
+  getCachedWeekChangePercents,
+  getQuotes,
+  getWeekChangePercents,
+  type QuoteResult,
+} from "@/lib/yahoo";
 
 export type WatchlistEntry =
   | {
@@ -71,7 +80,12 @@ export async function ensureWatchlistPresets(): Promise<void> {
   }
 }
 
-export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
+/** liveListId：只替這個清單向外部抓報價，其他清單用快取（getCachedQuotes），
+ *  畫面上只會顯示一個清單，沒顯示的不必每次都抓。
+ *  undefined＝全部都抓；null＝一個都不抓；找不到這個 id 就抓第一個清單。 */
+export async function getWatchlists(
+  liveListId?: string | null,
+): Promise<WatchlistWithEntries[]> {
   await ensureWatchlistPresets();
 
   const lists = await prisma.watchlist.findMany({
@@ -88,10 +102,25 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
       ),
     ),
   ];
-  const [quotes, weekChanges] = await Promise.all([
-    allSymbols.length > 0 ? getQuotes(allSymbols) : Promise.resolve(new Map<string, QuoteResult>()),
-    allSymbols.length > 0 ? getWeekChangePercents(allSymbols) : Promise.resolve(new Map<string, number | null>()),
+  const symbolsOf = (list: (typeof lists)[number]) =>
+    list.items.filter((i) => i.kind !== "SEPARATOR" && i.symbol).map((i) => i.symbol!);
+  const liveList = liveListId
+    ? (lists.find((l) => l.id === liveListId) ?? lists[0])
+    : undefined;
+  const liveSymbols = new Set(
+    liveListId === undefined ? allSymbols : liveList ? symbolsOf(liveList) : [],
+  );
+  const live = allSymbols.filter((s) => liveSymbols.has(s));
+  const rest = allSymbols.filter((s) => !liveSymbols.has(s));
+
+  const [liveQuotes, restQuotes, liveWeek, restWeek] = await Promise.all([
+    live.length > 0 ? getQuotes(live) : new Map<string, QuoteResult>(),
+    rest.length > 0 ? getCachedQuotes(rest) : new Map<string, QuoteResult>(),
+    live.length > 0 ? getWeekChangePercents(live) : new Map<string, number | null>(),
+    rest.length > 0 ? getCachedWeekChangePercents(rest) : new Map<string, number | null>(),
   ]);
+  const quotes = new Map([...restQuotes, ...liveQuotes]);
+  const weekChanges = new Map([...restWeek, ...liveWeek]);
 
   const instruments = await prisma.instrument.findMany({
     where: { symbol: { in: allSymbols } },
@@ -115,11 +144,17 @@ export async function getWatchlists(): Promise<WatchlistWithEntries[]> {
           }
           const symbol = item.symbol;
           const quote = quotes.get(symbol);
-          const displayName = await resolveInstrumentDisplayName(symbol, [
+          const knownNames = [
             item.name,
             instrumentNames.get(symbol.toUpperCase()),
             quote?.name,
-          ]);
+          ];
+          // 沒顯示的清單不上網查名稱：名稱每天由開機維護校正寫回資料庫，這裡用存著的就好
+          const displayName = liveSymbols.has(symbol)
+            ? await resolveInstrumentDisplayName(symbol, knownNames, {
+                fetchQuote: false,
+              })
+            : pickDisplayName(symbol, knownNames);
           return {
             id: item.id,
             kind: "SYMBOL",
@@ -166,11 +201,11 @@ export async function correctWatchlistItemNames(): Promise<void> {
   for (const item of items) {
     const symbol = item.symbol!;
     const quote = quotes.get(symbol);
-    const displayName = await resolveInstrumentDisplayName(symbol, [
-      item.name,
-      instrumentNames.get(symbol.toUpperCase()),
-      quote?.name,
-    ]);
+    const displayName = await resolveInstrumentDisplayName(
+      symbol,
+      [item.name, instrumentNames.get(symbol.toUpperCase()), quote?.name],
+      { fetchQuote: false },
+    );
     if (displayName && displayName !== symbol && displayName !== item.name) {
       updates.push({ id: item.id, name: displayName });
     }

@@ -12,13 +12,15 @@ import type { HoldingPosition, PortfolioSummary } from "@/lib/portfolio-engine";
 import type { InstrumentSuggestion } from "@/lib/instrument-suggestions";
 import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import {
+  marketDataUrl,
   prefetchPerformanceWarm,
   prefetchSiblingPages,
   prefetchValueHistoryWarm,
 } from "@/lib/prefetch-page-data";
+import { loadDashboardPrefs } from "@/lib/ui-prefs";
 import type { WatchlistWithEntries } from "@/lib/watchlist";
 
-/** 與 Overview 頁共用 /api/portfolio/dashboard 的快取（同一 cache key）。 */
+/** /api/portfolio/dashboard?watchlist=<選中的清單> 的回傳；只有選中的清單是即時報價。 */
 type DashboardPayload = {
   summary: PortfolioSummary;
   holdings: HoldingPosition[];
@@ -29,10 +31,17 @@ type DashboardPayload = {
 
 export function MarketPageClient() {
   const pathname = usePathname();
+  // 只替選中的清單抓報價：切換清單會換網址，useCachedPageData 先畫快取再抓新的
+  const [activeListId, setActiveListId] = useState<string | null>(() =>
+    typeof window === "undefined"
+      ? null
+      : (loadDashboardPrefs().activeWatchlistId ?? null),
+  );
+  const dataUrl = marketDataUrl(activeListId);
   const { data, refreshing, error, isPending, refresh, updatedAt } =
     useCachedPageData<DashboardPayload>(
       PAGE_CACHE_KEYS.dashboard,
-      "/api/portfolio/dashboard",
+      dataUrl,
     );
   // 只看畫面上正在顯示的標的（目前選中的追蹤清單、本日持倉表現篩選後的持股），
   // 由各元件透過 useDisplayedSymbols 登記
@@ -76,6 +85,7 @@ export function MarketPageClient() {
           watchlists={data.watchlists}
           instruments={data.instruments}
           priorityInstruments={data.priorityInstruments}
+          onActiveListChange={setActiveListId}
         />
       </DisplayedSymbolsProvider>
     </>

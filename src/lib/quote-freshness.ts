@@ -1,12 +1,12 @@
 import { TAIWAN_VIX_SYMBOL } from "@/lib/custom-series-symbols";
 import { isCryptoSymbol } from "@/lib/market-utils";
 
-/** 即時報價要不要重抓：開盤中每檔最多每 QUOTE_REFRESH_MS 抓一次；
+/** 即時報價要不要重抓：開盤中每檔最多每 QUOTE_REFRESH_MS（3 分鐘）抓一次；
  *  已收盤且已經拿過收盤後的報價就不再抓，直到下一個交易時段。
  *  純函式、不碰網路，方便測試；快取本身在 lib/yahoo.ts。 */
 
-/** 開盤中（或無法判斷收盤時）同一檔報價的重抓間隔 */
-export const QUOTE_REFRESH_MS = 60_000;
+/** 開盤中（或無法判斷收盤時）同一檔報價的重抓間隔；跟頁面自動更新同一個數字 */
+export const QUOTE_REFRESH_MS = 3 * 60_000;
 /** 時鐘說開盤、但 Yahoo 最後成交時間停在前一天（國定假日或整天沒成交）時的重抓間隔 */
 export const QUOTE_HOLIDAY_REFRESH_MS = 30 * 60_000;
 

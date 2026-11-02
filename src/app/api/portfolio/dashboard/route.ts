@@ -7,10 +7,13 @@ import { withRequestScope } from "@/lib/request-priority";
 import { getWatchlists } from "@/lib/watchlist";
 
 export async function GET(request: Request) {
-  return withRequestScope(request, loadDashboard);
+  return withRequestScope(request, () => loadDashboard(request));
 }
 
-async function loadDashboard() {
+/** ?watchlist=none：不載入追蹤清單（Overview 用不到）；
+ *  ?watchlist=<id>：只替這個清單抓報價，其他清單用快取；沒帶就全部抓。 */
+async function loadDashboard(request: Request) {
+  const watchlistParam = new URL(request.url).searchParams.get("watchlist");
   try {
     // 保險：正常情況下開機維護由 /api/startup/status 在啟動畫面階段就跑完，
     // 這裡只是防呆——萬一那條路徑沒被觸發（例如直接用 next dev 開發），
@@ -19,7 +22,9 @@ async function loadDashboard() {
 
     const [holdings, watchlists, instruments] = await Promise.all([
       getHoldings(),
-      getWatchlists(),
+      watchlistParam === "none"
+        ? Promise.resolve([])
+        : getWatchlists(watchlistParam ?? undefined),
       prisma.instrument.findMany({ orderBy: { symbol: "asc" } }),
     ]);
     const [summary, priorityInstruments] = await Promise.all([

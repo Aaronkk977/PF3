@@ -18,11 +18,13 @@ import { normalizeSymbolInput } from "@/lib/instrument-search";
 import { canAddSymbolToWatchlist } from "@/lib/yahoo";
 
 export async function GET(request: Request) {
-  return withRequestScope(request, loadWatchlists);
+  return withRequestScope(request, () => loadWatchlists(request));
 }
 
-async function loadWatchlists() {
-  const lists = await getWatchlists();
+/** ?listId=<id>：只替畫面上這個清單抓報價，其他清單用快取 */
+async function loadWatchlists(request: Request) {
+  const listId = new URL(request.url).searchParams.get("listId");
+  const lists = await getWatchlists(listId ?? undefined);
   return NextResponse.json({ lists });
 }
 

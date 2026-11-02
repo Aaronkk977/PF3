@@ -12,6 +12,7 @@ import { useCachedPageData } from "@/hooks/use-cached-page-data";
 import type { PortfolioSummary } from "@/lib/portfolio-engine";
 import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
 import {
+  OVERVIEW_DATA_URL,
   prefetchPerformanceWarm,
   prefetchSiblingPages,
   prefetchValueHistoryWarm,
@@ -23,8 +24,8 @@ import {
   formatPercent,
 } from "@/lib/utils";
 
-/** 與 /api/portfolio/dashboard 回傳一致；本頁只用 summary，
- * 但沿用同一 cache key，讓 Overview/Market 兩頁共用一份快取與報價成本。 */
+/** /api/portfolio/dashboard?watchlist=none 的回傳；本頁只用 summary 與持股代號。
+ *  不載入追蹤清單，所以用自己的 cache key，不跟 Market 共用。 */
 type DashboardPayload = {
   summary: PortfolioSummary;
   holdings?: { symbol: string }[];
@@ -34,8 +35,8 @@ export function OverviewPageClient() {
   const pathname = usePathname();
   const { data, refreshing, error, isPending, refresh, updatedAt } =
     useCachedPageData<DashboardPayload>(
-      PAGE_CACHE_KEYS.dashboard,
-      "/api/portfolio/dashboard",
+      PAGE_CACHE_KEYS.overview,
+      OVERVIEW_DATA_URL,
     );
   // 總覽的數字只跟持股有關，盤中與否看持股所屬市場
   const symbols = useMemo(

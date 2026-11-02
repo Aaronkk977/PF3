@@ -182,6 +182,7 @@ export function InstrumentDetailClient({
       setQuickAddTax("0");
       setQuickAddNote("");
       clearClientCache(PAGE_CACHE_KEYS.dashboard);
+      clearClientCache(PAGE_CACHE_KEYS.overview);
       clearClientCache(PAGE_CACHE_KEYS.holdings);
       clearClientCache(PAGE_CACHE_KEYS.transactions);
       router.refresh();
@@ -277,6 +278,7 @@ export function InstrumentDetailClient({
     // so Holdings / Transactions / Dashboard show the new name immediately
     // on next visit instead of serving stale sessionStorage data.
     clearClientCache(PAGE_CACHE_KEYS.dashboard);
+    clearClientCache(PAGE_CACHE_KEYS.overview);
     clearClientCache(PAGE_CACHE_KEYS.holdings);
     clearClientCache(PAGE_CACHE_KEYS.transactions);
     router.refresh();

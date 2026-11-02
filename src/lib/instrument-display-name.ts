@@ -183,9 +183,13 @@ export function pickDisplayName(
   return candidates[0]!;
 }
 
+/** fetchQuote：呼叫端已經有這檔的報價（名稱已放進 extraNames）就傳 false，
+ *  不要為了查名稱再打一次即時報價——追蹤清單一次上百檔，會繞過「只抓畫面上的
+ *  清單」的規則。 */
 export async function resolveInstrumentDisplayName(
   symbol: string,
   extraNames: (string | null | undefined)[] = [],
+  { fetchQuote = true }: { fetchQuote?: boolean } = {},
 ): Promise<string> {
   const sym = normalizeSymbolInput(symbol);
   const names: (string | null | undefined)[] = [...extraNames];
@@ -203,8 +207,10 @@ export async function resolveInstrumentDisplayName(
     }
   }
 
-  const quote = await getQuote(sym).catch(() => null);
-  if (quote?.name) names.push(quote.name);
+  if (fetchQuote) {
+    const quote = await getQuote(sym).catch(() => null);
+    if (quote?.name) names.push(quote.name);
+  }
 
   const result = pickDisplayName(sym, names);
 

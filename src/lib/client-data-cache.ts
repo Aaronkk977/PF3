@@ -60,6 +60,7 @@ export function patchClientCache<T extends object>(
  *  page-request-headers.ts）——頁面識別集中在這裡一份，避免各處散落字串。 */
 export const PAGE_CACHE_KEYS = {
   dashboard: "dashboard",
+  overview: "overview",
   holdings: "holdings",
   transactions: "transactions",
   trades: "trades",

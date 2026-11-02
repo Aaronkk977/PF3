@@ -264,7 +264,7 @@ function applyTaiwanQuoteClose(
  *  併發的，若只快取已完成的值，兩個幾乎同時發出的查詢會在快取還空的時候一起
  *  衝去打 Yahoo。存 promise 才能讓後到的呼叫直接等同一個結果。
  *
- *  完成後多久要重抓由 isQuoteFresh 決定：盤中每檔最多每 60 秒一次，收盤後拿到
+ *  完成後多久要重抓由 isQuoteFresh 決定：盤中每檔最多每 3 分鐘一次，收盤後拿到
  *  收盤價就不再抓（持倉、Market、Overview 與背景預熱都共用這份），避免切頁就
  *  把每檔持股重打一輪 Yahoo。
  *
@@ -274,6 +274,7 @@ type QuoteCacheEntry = {
   promise: Promise<QuoteResult>;
   /** 完成後才有 */
   state?: CachedQuoteState;
+  result?: QuoteResult;
 };
 const quoteCache: Map<string, QuoteCacheEntry> = ((
   globalThis as { __quoteCache?: Map<string, QuoteCacheEntry> }
@@ -290,6 +291,7 @@ export async function getQuote(symbol: string): Promise<QuoteResult> {
   quoteCache.set(symbol, entry);
   promise.then(
     (result) => {
+      entry.result = result;
       entry.state = {
         fetchedAt: Date.now(),
         // 只拿到本機舊價或完全沒有價格，都照一般間隔重試
@@ -432,6 +434,51 @@ async function fetchQuoteLive(symbol: string): Promise<QuoteResult> {
     }
     return { symbol, price: 0, stale: true };
   }
+}
+
+/** 不向外部抓的報價：記憶體裡上次抓到的，沒有就用資料庫最近的收盤價。
+ *  畫面上沒顯示的標的（例如沒選中的追蹤清單）用這個，切過去時才用 getQuotes 抓。 */
+export async function getCachedQuotes(
+  symbols: string[],
+): Promise<Map<string, QuoteResult>> {
+  const map = new Map<string, QuoteResult>();
+  await Promise.all(
+    symbols.map(async (symbol) => {
+      const remembered = quoteCache.get(symbol)?.result;
+      if (remembered) {
+        map.set(symbol, remembered);
+        return;
+      }
+      const fromDb = await getDayChangeFromCache(symbol, Infinity).catch(() => null);
+      if (fromDb) {
+        map.set(symbol, {
+          symbol,
+          price: fromDb.price,
+          change: fromDb.change,
+          changePercent: fromDb.changePercent,
+          stale: true,
+        });
+        return;
+      }
+      const close = await getLatestCachedClose(symbol).catch(() => null);
+      map.set(symbol, { symbol, price: close ?? 0, stale: true });
+    }),
+  );
+  return map;
+}
+
+/** 週漲跌只讀資料庫的日線，不向外部抓；用途同 getCachedQuotes */
+export async function getCachedWeekChangePercents(
+  symbols: string[],
+): Promise<Map<string, number | null>> {
+  const unique = [...new Set(symbols.map((s) => s.trim().toUpperCase()))];
+  const entries = await Promise.all(
+    unique.map(
+      async (sym) =>
+        [sym, await getWeekChangeFromCache(sym).catch(() => null)] as const,
+    ),
+  );
+  return new Map(entries);
 }
 
 export async function getQuotes(symbols: string[]): Promise<Map<string, QuoteResult>> {

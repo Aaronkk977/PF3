@@ -1,7 +1,8 @@
-import { isQuoteMarketActive } from "@/lib/quote-freshness";
+import { isQuoteMarketActive, QUOTE_REFRESH_MS } from "@/lib/quote-freshness";
 
-/** 頁面放著不動時，盤中自動重新載入的間隔 */
-export const AUTO_REFRESH_MS = 5 * 60_000;
+/** 頁面放著不動時，盤中自動重新載入的間隔；跟報價快取同一個數字（3 分鐘），
+ *  每次自動更新都剛好拿得到新報價 */
+export const AUTO_REFRESH_MS = QUOTE_REFRESH_MS;
 
 /** 該不該現在自動更新：視窗在前景、沒有更新在跑、頁面上有標的在交易時段
  *  （加密貨幣 24 小時都算），而且距離上次更新已經滿一個間隔。 */

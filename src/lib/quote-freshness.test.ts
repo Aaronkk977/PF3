@@ -37,18 +37,18 @@ test("依代碼判斷市場", () => {
 
 test("日股依東京時間：台北 14:00 = 東京 15:00 仍在盤中", () => {
   const now = tw("2026-11-03T14:00:00");
-  assert.equal(isQuoteFresh("2802.T", { fetchedAt: ago(now, 90_000) }, now), false);
+  assert.equal(isQuoteFresh("2802.T", { fetchedAt: ago(now, 4 * 60_000) }, now), false);
 });
 
-test("台股盤中：60 秒內沿用，超過就重抓", () => {
+test("台股盤中：3 分鐘內沿用，超過就重抓", () => {
   const now = tw("2026-11-03T10:00:00"); // 週二
-  assert.equal(isQuoteFresh("2330.TW", { fetchedAt: ago(now, 30_000) }, now), true);
+  assert.equal(isQuoteFresh("2330.TW", { fetchedAt: ago(now, 2 * 60_000) }, now), true);
   assert.equal(isQuoteFresh("2330.TW", { fetchedAt: ago(now, QUOTE_REFRESH_MS) }, now), false);
 });
 
 test("台股收盤後 15 分鐘內仍照間隔重抓，等收盤價定案", () => {
   const now = tw("2026-11-03T13:40:00");
-  assert.equal(isQuoteFresh("2330.TW", { fetchedAt: ago(now, 90_000) }, now), false);
+  assert.equal(isQuoteFresh("2330.TW", { fetchedAt: ago(now, 4 * 60_000) }, now), false);
 });
 
 test("台股收盤後：收盤後抓過就不再抓，收盤前抓的要再抓一次", () => {
@@ -100,21 +100,21 @@ test("美股依紐約時間：台灣早上是美股收盤後", () => {
   );
 });
 
-test("美股盤中照 60 秒間隔", () => {
+test("美股盤中照 3 分鐘間隔", () => {
   const now = ny("2026-11-03T11:00:00");
   assert.equal(isQuoteFresh("AAPL", { fetchedAt: ago(now, 10_000) }, now), true);
-  assert.equal(isQuoteFresh("AAPL", { fetchedAt: ago(now, 61_000) }, now), false);
+  assert.equal(isQuoteFresh("AAPL", { fetchedAt: ago(now, 4 * 60_000) }, now), false);
 });
 
-test("加密貨幣不看開收盤，一律 60 秒", () => {
+test("加密貨幣不看開收盤，一律 3 分鐘", () => {
   const now = tw("2026-11-08T03:00:00"); // 週日半夜
-  assert.equal(isQuoteFresh("BTC-USD", { fetchedAt: ago(now, 30_000) }, now), true);
-  assert.equal(isQuoteFresh("BTC-USD", { fetchedAt: ago(now, 61_000) }, now), false);
+  assert.equal(isQuoteFresh("BTC-USD", { fetchedAt: ago(now, 2 * 60_000) }, now), true);
+  assert.equal(isQuoteFresh("BTC-USD", { fetchedAt: ago(now, 4 * 60_000) }, now), false);
 });
 
-test("上次失敗（舊快取）收盤後也照 60 秒重試", () => {
+test("上次失敗（舊快取）收盤後也照 3 分鐘重試", () => {
   const now = tw("2026-11-03T20:00:00");
-  const fetchedAt = tw("2026-11-03T19:58:00").getTime();
+  const fetchedAt = tw("2026-11-03T19:56:00").getTime();
   assert.equal(isQuoteFresh("2330.TW", { fetchedAt, stale: true }, now), false);
   assert.equal(isQuoteFresh("2330.TW", { fetchedAt }, now), true);
 });
@@ -134,7 +134,7 @@ test("開盤頭 15 分鐘還沒成交不算休市", () => {
   const now = tw("2026-11-03T09:10:00");
   const marketTime = tw("2026-11-02T13:30:00").getTime();
   assert.equal(
-    isQuoteFresh("2330.TW", { fetchedAt: ago(now, 2 * 60_000), marketTime }, now),
+    isQuoteFresh("2330.TW", { fetchedAt: ago(now, 4 * 60_000), marketTime }, now),
     false,
   );
 });
@@ -143,7 +143,7 @@ test("有今天的成交就是正常盤中", () => {
   const now = tw("2026-11-03T10:30:00");
   const marketTime = tw("2026-11-03T10:29:00").getTime();
   assert.equal(
-    isQuoteFresh("2330.TW", { fetchedAt: ago(now, 2 * 60_000), marketTime }, now),
+    isQuoteFresh("2330.TW", { fetchedAt: ago(now, 4 * 60_000), marketTime }, now),
     false,
   );
 });

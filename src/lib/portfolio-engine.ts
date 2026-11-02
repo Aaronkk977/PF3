@@ -97,15 +97,30 @@ export async function getHoldings(): Promise<HoldingPosition[]> {
     },
   });
 
-  const symbols = instruments.map((i) => i.symbol);
-  const quotes = await getQuotes(symbols);
+  // 標的表裡也有只在追蹤清單、或早已出清的標的；先用交易算出還有持股的，
+  // 只替這些抓報價，不要每次算持倉都把整張標的表（上百檔）打一輪 Yahoo。
+  const securityTxsOf = (inst: (typeof instruments)[number]) =>
+    inst.transactions.filter(
+      (t) => t.type === "BUY" || t.type === "SELL" || t.type === "DIVIDEND",
+    );
+  const heldInstruments = instruments.filter(
+    (inst) =>
+      computePositionFromTransactions(
+        securityTxsOf(inst).map((t) => ({
+          type: t.type,
+          quantity: toNumber(t.quantity),
+          price: toNumber(t.price),
+          fee: toNumber(t.fee),
+          tax: toNumber(t.tax),
+        })),
+      ).quantity > 0.0000001,
+  );
+  const quotes = await getQuotes(heldInstruments.map((i) => i.symbol));
 
   const positions: HoldingPosition[] = [];
 
-  for (const inst of instruments) {
-    const securityTxs = inst.transactions.filter(
-      (t) => t.type === "BUY" || t.type === "SELL" || t.type === "DIVIDEND",
-    );
+  for (const inst of heldInstruments) {
+    const securityTxs = securityTxsOf(inst);
 
     const txs = securityTxs.map((t) => ({
       type: t.type,

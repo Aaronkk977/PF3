@@ -36,8 +36,10 @@ import {
 } from "@/lib/client-data-cache";
 import { pageRequestHeaders } from "@/lib/page-request-headers";
 
-async function fetchWatchlists(): Promise<WatchlistWithEntries[]> {
-  const res = await fetch("/api/watchlist", {
+/** listId：只替畫面上這個清單抓報價，其他清單用快取 */
+async function fetchWatchlists(listId: string): Promise<WatchlistWithEntries[]> {
+  const params = listId ? `?listId=${encodeURIComponent(listId)}` : "";
+  const res = await fetch(`/api/watchlist${params}`, {
     headers: pageRequestHeaders(PAGE_CACHE_KEYS.dashboard),
   });
   const json = (await res.json()) as { lists: WatchlistWithEntries[] };
@@ -54,11 +56,14 @@ export function MarketClient({
   watchlists: initialWatchlists,
   instruments,
   priorityInstruments,
+  onActiveListChange,
 }: {
   holdings: HoldingPosition[];
   watchlists: WatchlistWithEntries[];
   instruments: Instrument[];
   priorityInstruments: InstrumentSuggestion[];
+  /** 選中的清單變了：頁面據此只替這個清單抓報價 */
+  onActiveListChange?: (listId: string) => void;
 }) {
   const router = useRouter();
   const [lists, setLists] = useState(initialWatchlists);
@@ -175,7 +180,8 @@ export function MarketClient({
   useEffect(() => {
     if (!watchlistPrefsReady || !activeListId) return;
     saveDashboardPrefs({ activeWatchlistId: activeListId });
-  }, [activeListId, watchlistPrefsReady]);
+    onActiveListChange?.(activeListId);
+  }, [activeListId, watchlistPrefsReady, onActiveListChange]);
 
   // 新增清單的橢圓輸入框：依文字內容量測寬度，讓輸入框像跟著文字長度伸縮
   useEffect(() => {
@@ -190,7 +196,7 @@ export function MarketClient({
   }
 
   async function refreshLists(selectId?: string) {
-    const next = await fetchWatchlists();
+    const next = await fetchWatchlists(selectId ?? activeListId);
     setLists(next);
     persistWatchlistsToCache(next);
     if (selectId) setActiveListId(selectId);
@@ -613,7 +619,7 @@ export function MarketClient({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ listId: activeList.id, symbol, name }),
                   });
-                  const updated = await fetchWatchlists();
+                  const updated = await fetchWatchlists(activeList.id);
                   setLists(updated);
                   persistWatchlistsToCache(updated);
                 }}

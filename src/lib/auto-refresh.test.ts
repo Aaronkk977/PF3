@@ -10,14 +10,14 @@ const base = {
   symbols: ["2330.TW"],
 };
 
-test("台股盤中、滿 5 分鐘就更新", () => {
+test("台股盤中、滿 3 分鐘就更新", () => {
   const now = tw("2026-11-03T10:00:00");
   assert.equal(
     shouldAutoRefresh({ ...base, now, lastUpdatedAt: now.getTime() - AUTO_REFRESH_MS }),
     true,
   );
   assert.equal(
-    shouldAutoRefresh({ ...base, now, lastUpdatedAt: now.getTime() - 4 * 60_000 }),
+    shouldAutoRefresh({ ...base, now, lastUpdatedAt: now.getTime() - 2 * 60_000 }),
     false,
   );
 });
