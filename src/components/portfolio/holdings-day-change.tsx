@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useDisplayedSymbols } from "@/components/layout/displayed-symbols";
 import { instrumentHref } from "@/lib/instrument-nav";
 import type { HoldingPosition } from "@/lib/portfolio-engine";
 import {
@@ -157,6 +158,8 @@ export function HoldingsDayChange({ holdings }: { holdings: HoldingPosition[] })
     () => holdings.filter((h) => matchesMarketFilter(h, marketFilter)),
     [holdings, marketFilter],
   );
+  const filteredSymbols = useMemo(() => filtered.map((h) => h.symbol), [filtered]);
+  useDisplayedSymbols(filteredSymbols);
 
   const sorted = useMemo(() => {
     const list = [...filtered];

@@ -47,6 +47,8 @@ export type QuoteResult = {
   previousClose?: number;
   /** 即時報價來源（Yahoo）本次呼叫失敗，此結果為本機快取的舊價 */
   stale?: boolean;
+  /** Yahoo 回報的最後成交時間（epoch ms）；判斷休市用 */
+  marketTime?: number;
 };
 
 export type OhlcBar = {
@@ -83,6 +85,7 @@ type ChartResponse = {
         shortName?: string;
         longName?: string;
         regularMarketPrice?: number;
+        regularMarketTime?: number;
       };
       timestamp?: number[];
       indicators?: {
@@ -229,7 +232,13 @@ export async function getDayChangeFromChart(
 }
 
 type ChartSnapshot = {
-  meta: { currency?: string; name?: string; price?: number } | null;
+  meta: {
+    currency?: string;
+    name?: string;
+    price?: number;
+    /** 最後成交時間（epoch ms） */
+    marketTime?: number;
+  } | null;
   bars: OhlcBar[];
   /** 若最新一根有效 close 前面緊鄰著一個 null（缺口），這裡是那個缺口日期
    *  的 YYYYMMDD；否則是 undefined。目前只給 ^TWII 拿去查證交所校正用。 */
@@ -242,7 +251,9 @@ type ChartSnapshot = {
   latestBarPending: boolean;
 };
 
-/** 單一請求同時取得 meta（名稱／幣別／現價）與日線 K 棒，避免多打一次請求。 */
+/** 單一請求同時取得 meta（名稱／幣別／現價）與日線 K 棒，避免多打一次請求。
+ *  即時報價用：不走 Next 的資料快取（以前 revalidate 900 讓報價最多舊 15 分鐘），
+ *  重抓頻率改由 lib/quote-freshness.ts 依開收盤控制。 */
 export async function fetchChartSnapshot(quoteSymbol: string): Promise<ChartSnapshot | null> {
   try {
     const end = new Date();
@@ -251,7 +262,7 @@ export async function fetchChartSnapshot(quoteSymbol: string): Promise<ChartSnap
     const period1 = Math.floor(start.getTime() / 1000);
     const period2 = Math.floor(end.getTime() / 1000);
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(quoteSymbol)}?period1=${period1}&period2=${period2}&interval=1d`;
-    const res = await fetchWithTimeout(url, { next: { revalidate: 900 } });
+    const res = await fetchWithTimeout(url, { cache: "no-store" });
     if (!res?.ok) return null;
 
     const data = (await res.json()) as ChartResponse;
@@ -263,6 +274,10 @@ export async function fetchChartSnapshot(quoteSymbol: string): Promise<ChartSnap
           currency: result.meta.currency,
           name: result.meta.longName ?? result.meta.shortName,
           price: result.meta.regularMarketPrice,
+          marketTime:
+            result.meta.regularMarketTime != null
+              ? result.meta.regularMarketTime * 1000
+              : undefined,
         }
       : null;
 

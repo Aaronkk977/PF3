@@ -78,6 +78,9 @@ export type BenchmarkComparison = {
 export type PerformanceMetrics = {
   periodStart: string;
   periodEnd: string;
+  /** 「今天」那一點用到即時報價的標的（選取帳戶交易過的標的＋基準）；
+   *  快取與頁面自動更新用來判斷開收盤 */
+  quoteSymbols: string[];
   chartData: Record<string, string | number>[];
   chartLines: ChartSeriesLine[];
   portfolioSeries: PerformanceSeriesPoint[];
@@ -440,10 +443,23 @@ export async function getPerformance(
     });
   }
 
+  const tradedInstruments = await prisma.transaction.findMany({
+    where: { accountId: { in: selectedIds }, instrumentId: { not: null } },
+    distinct: ["instrumentId"],
+    select: { instrument: { select: { symbol: true } } },
+  });
+  const quoteSymbols = [
+    ...new Set([
+      ...tradedInstruments.flatMap((t) => (t.instrument ? [t.instrument.symbol] : [])),
+      ...benchmarkSymbols,
+    ]),
+  ];
+
   report("完成", 100);
   return {
     periodStart: periodStart.toISOString().slice(0, 10),
     periodEnd: periodEnd.toISOString().slice(0, 10),
+    quoteSymbols,
     chartData,
     chartLines,
     portfolioSeries,

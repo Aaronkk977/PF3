@@ -1,3 +1,4 @@
+import { AUTO_REFRESH_MS } from "@/lib/auto-refresh";
 import { ENTIRE_PORTFOLIO_FILTER_ID } from "@/lib/chart-constants";
 import { readStoredEntry, writeStoredEntry } from "@/lib/client-data-cache";
 
@@ -30,15 +31,14 @@ export type HoldingsValueCacheEntry = {
 const CACHE_VERSION = "v14";
 
 /** 同日快取視為仍有效，避免每次進頁都重算 */
+/** 本機快取多新可以不問伺服器。以前是「同一天就算新」，讓走勢圖「今天」那一點
+ *  整天停在第一次開頁的盤中值；現在跟頁面自動更新同一個間隔，過了就問伺服器——
+ *  伺服器只重跑最後一天，收盤後也不會再向 Yahoo 重抓，成本很低。 */
 export function isHoldingsValueCacheFresh(cachedAt: string): boolean {
-  const cached = new Date(cachedAt);
-  if (Number.isNaN(cached.getTime())) return false;
-  const now = new Date();
-  return (
-    cached.getFullYear() === now.getFullYear() &&
-    cached.getMonth() === now.getMonth() &&
-    cached.getDate() === now.getDate()
-  );
+  const cached = new Date(cachedAt).getTime();
+  if (Number.isNaN(cached)) return false;
+  const age = Date.now() - cached;
+  return age >= 0 && age < AUTO_REFRESH_MS;
 }
 
 /** @param dataVersion 交易資料指紋（由 /api/portfolio/holdings-page 提供）。

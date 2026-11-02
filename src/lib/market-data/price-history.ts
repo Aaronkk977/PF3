@@ -12,6 +12,7 @@ import { isTaiwanMarginSymbol } from "@/lib/custom-series-symbols";
 import { syncMarginHistory } from "@/lib/market-data/taiwan-margin";
 import { isTaiwanVixSymbol, syncVixHistory } from "@/lib/market-data/taiwan-vix";
 import { fetchChart, type OhlcBar } from "@/lib/market-data/yahoo-chart";
+import { isQuoteFresh } from "@/lib/quote-freshness";
 
 /** 歷史日線：先讀 PriceCache，過期或不夠長才向 Yahoo 補抓並寫回。 */
 
@@ -38,10 +39,16 @@ export async function getHistoricalPrices(
 
   const covers = cacheCoversRange(cached, periodStart, periodEnd);
   // cachedAt 讀「日期最新那一列」，剛好就是下面只重抓的那段尾巴，兩者一致。
-  const cacheAgeMs =
-    Date.now() - (cached[cached.length - 1]?.cachedAt?.getTime() ?? 0);
+  const lastCachedAt = cached[cached.length - 1]?.cachedAt?.getTime() ?? 0;
+  const cacheAgeMs = Date.now() - lastCachedAt;
 
-  if (cached.length > 0 && covers && cacheAgeMs <= CACHE_TTL_MS) {
+  // 尾端新不新鮮跟即時報價同一套規則：盤中 15 分鐘；收盤後只要收盤後抓過就
+  // 沿用到下一個交易時段，不會收盤後每 15 分鐘還在重抓最近幾天。
+  if (
+    cached.length > 0 &&
+    covers &&
+    isQuoteFresh(symbol, { fetchedAt: lastCachedAt }, new Date(), CACHE_TTL_MS)
+  ) {
     return cachedBars;
   }
 

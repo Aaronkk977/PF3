@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PerformanceChart,
   type ChartLineConfig,
@@ -38,6 +38,7 @@ import {
   loadPerformancePrefs,
   savePerformancePrefs,
 } from "@/lib/ui-prefs";
+import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { useChartTheme } from "@/hooks/use-chart-theme";
 import { resolveAccountSwatchColor } from "@/lib/chart-palette";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";
@@ -60,6 +61,8 @@ type PerformanceData = {
   benchmarks: BenchmarkComparison[];
   todayChange: number;
   todayChangePct: number;
+  /** 「今天」那一點用到即時報價的標的；舊快取沒有 */
+  quoteSymbols?: string[];
   fromCache?: boolean;
   keyIndicators: {
     periodReturn: number;
@@ -356,16 +359,22 @@ export function PerformanceClient({
       );
     }) ?? [];
 
+  /** 上次從伺服器拿到結果的時間（epoch ms），自動更新判斷間隔用 */
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  /** silent：不顯示進度條；quiet：連右下角的背景更新提示都不顯示（自動更新用） */
   const load = useCallback(
-    async (opts?: { force?: boolean; silent?: boolean }) => {
+    async (opts?: { force?: boolean; silent?: boolean; quiet?: boolean }) => {
       const force = opts?.force ?? false;
       const silent = opts?.silent ?? false;
+      const quiet = opts?.quiet ?? false;
       if (selectedAccountIds.length === 0) {
         if (!silent) alert("請至少選擇一個帳戶");
         return;
       }
-      if (silent) setBgRefreshing(true);
-      else {
+      if (silent) {
+        if (!quiet) setBgRefreshing(true);
+      } else {
         setLoading(true);
         setProgress(0);
         setProgressPhase("準備計算…");
@@ -432,6 +441,7 @@ export function PerformanceClient({
         if (!result) throw new Error("未取得績效結果");
 
         setData(result);
+        setLoadedAt(Date.now());
         if (!silent) setProgress(100);
         const cacheKey = buildPerformanceCacheKey(
           start,
@@ -460,8 +470,9 @@ export function PerformanceClient({
             : `已重新計算 · ${new Date(cachedAt).toLocaleString("zh-TW")}`,
         );
       } finally {
-        if (silent) setBgRefreshing(false);
-        else {
+        if (silent) {
+          if (!quiet) setBgRefreshing(false);
+        } else {
           setLoading(false);
           setProgressPhase(null);
         }
@@ -484,6 +495,19 @@ export function PerformanceClient({
     initialBgLoadDone.current = true;
     void load({ silent: true });
   }, [prefsReady, selectedAccountIds.length, load]);
+
+  // 期間含今天才需要：放著不動時每 5 分鐘問一次，伺服器只在「今天」那一點
+  // 過期時（盤中滿 5 分鐘、收盤後還沒用收盤價算過）才重算最後一天
+  const autoRefreshSymbols = useMemo(
+    () =>
+      data && end >= toLocalDateKey(new Date()) ? (data.quoteSymbols ?? []) : [],
+    [data, end],
+  );
+  useAutoRefresh(
+    () => load({ silent: true, quiet: true }),
+    autoRefreshSymbols,
+    loadedAt,
+  );
 
   return (
     <div className="space-y-8">

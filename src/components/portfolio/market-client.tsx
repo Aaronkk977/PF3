@@ -22,6 +22,7 @@ import { normalizeSymbolInput } from "@/lib/instrument-symbol";
 import { isBuiltinWatchlistName } from "@/lib/watchlist-presets";
 import { WatchlistItemsList } from "@/components/portfolio/watchlist-items-list";
 import { ScreenerPanel } from "@/components/portfolio/screener-panel";
+import { useDisplayedSymbols } from "@/components/layout/displayed-symbols";
 import {
   ContextMenu,
   useContextMenu,
@@ -156,6 +157,16 @@ export function MarketClient({
     () => lists.find((l) => l.id === activeListId) ?? lists[0],
     [lists, activeListId],
   );
+
+  // 只有清單分頁顯示報價；選股器分頁不算
+  const displayedListSymbols = useMemo(
+    () =>
+      watchlistTab === "list" && activeList
+        ? activeList.items.flatMap((i) => (i.kind === "SYMBOL" ? [i.symbol] : []))
+        : [],
+    [watchlistTab, activeList],
+  );
+  useDisplayedSymbols(displayedListSymbols);
 
   useEffect(() => {
     setWatchlistPrefsReady(true);

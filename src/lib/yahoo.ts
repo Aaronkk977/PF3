@@ -34,6 +34,7 @@ import {
   isTaiwanStockSymbol,
   reconcileTaiwanQuoteFromPreviousClose,
 } from "@/lib/market-utils";
+import { isQuoteFresh, type CachedQuoteState } from "@/lib/quote-freshness";
 
 /** 即時報價：整合 Yahoo chart／.quote()、台灣 VIX、加權指數校正與 PriceCache
  *  備援，決定「該用哪個來源」。HTTP 與資料庫細節在 market-data/ 底下。
@@ -116,6 +117,7 @@ async function getLiveQuoteFromChart(symbol: string): Promise<QuoteResult | null
     change: dayChange?.change,
     changePercent: dayChange?.changePercent,
     previousClose: dayChange ? price - dayChange.change : undefined,
+    marketTime: snapshot.meta?.marketTime,
   };
 }
 
@@ -262,34 +264,46 @@ function applyTaiwanQuoteClose(
  *  併發的，若只快取已完成的值，兩個幾乎同時發出的查詢會在快取還空的時候一起
  *  衝去打 Yahoo。存 promise 才能讓後到的呼叫直接等同一個結果。
  *
- *  TTL 訂為 10 秒，對齊 Yahoo 這支 chart 端點自己回的
- *  `Cache-Control: public, max-age=10`——同一 10 秒窗口內不管誰打幾次，
- *  Yahoo CDN 回的都是同一份快取資料，我們縮短 TTL 也拿不到更新的價格，純粹
- *  多打幾次 Yahoo 而已。實測也發現即使是台積電這種高流動性股票，回報價格
- *  真正跳動的間隔常常有幾十秒甚至更久，比這個 TTL 長得多。 */
-const QUOTE_REQUEST_CACHE_TTL_MS = 10_000;
-const quoteRequestCache = new Map<
-  string,
-  { promise: Promise<QuoteResult>; at: number }
->();
+ *  完成後多久要重抓由 isQuoteFresh 決定：盤中每檔最多每 60 秒一次，收盤後拿到
+ *  收盤價就不再抓（持倉、Market、Overview 與背景預熱都共用這份），避免切頁就
+ *  把每檔持股重打一輪 Yahoo。
+ *
+ *  掛在 globalThis：Next 會把不同 API route 打包成各自的模組實例，放模組層級
+ *  的話每支 route 各有一份，達不到共用的目的。 */
+type QuoteCacheEntry = {
+  promise: Promise<QuoteResult>;
+  /** 完成後才有 */
+  state?: CachedQuoteState;
+};
+const quoteCache: Map<string, QuoteCacheEntry> = ((
+  globalThis as { __quoteCache?: Map<string, QuoteCacheEntry> }
+).__quoteCache ??= new Map());
 
 export async function getQuote(symbol: string): Promise<QuoteResult> {
-  const now = Date.now();
-  const existing = quoteRequestCache.get(symbol);
-  if (existing && now - existing.at < QUOTE_REQUEST_CACHE_TTL_MS) {
+  const existing = quoteCache.get(symbol);
+  if (existing && (!existing.state || isQuoteFresh(symbol, existing.state))) {
     return existing.promise;
   }
 
   const promise = fetchQuoteLive(symbol);
-  quoteRequestCache.set(symbol, { promise, at: now });
-  // fetchQuoteLive 內部已經把自己的例外都吃掉、一律回傳某種 QuoteResult
-  // （必要時 price:0/stale:true），理論上不會走到這裡；留著只是防呆——萬一
-  // 真的丟出例外，不要讓失敗的 promise 卡住快取擋住後續重試。
-  promise.catch(() => {
-    if (quoteRequestCache.get(symbol)?.promise === promise) {
-      quoteRequestCache.delete(symbol);
-    }
-  });
+  const entry: QuoteCacheEntry = { promise };
+  quoteCache.set(symbol, entry);
+  promise.then(
+    (result) => {
+      entry.state = {
+        fetchedAt: Date.now(),
+        // 只拿到本機舊價或完全沒有價格，都照一般間隔重試
+        stale: result.stale || !(result.price > 0),
+        marketTime: result.marketTime,
+      };
+    },
+    // fetchQuoteLive 內部已經把自己的例外都吃掉、一律回傳某種 QuoteResult
+    // （必要時 price:0/stale:true），理論上不會走到這裡；留著只是防呆——萬一
+    // 真的丟出例外，不要讓失敗的 promise 卡住快取擋住後續重試。
+    () => {
+      if (quoteCache.get(symbol) === entry) quoteCache.delete(symbol);
+    },
+  );
   return promise;
 }
 

@@ -27,14 +27,17 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
   );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 上次成功從伺服器拿到資料的時間（epoch ms）；只有快取還沒更新過是 null */
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const mounted = useRef(true);
 
   const dataRef = useRef<T | null>(data);
   dataRef.current = data;
 
+  /** silent：自動更新用，不亮「背景更新資料中」提示，免得每隔幾分鐘閃一次 */
   const refresh = useCallback(
-    async () => {
-      setRefreshing(true);
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) setRefreshing(true);
       setError(null);
       try {
         // 帶上來源頁：這是使用者正在看的頁，後端據此把「已經被切走的舊頁面」
@@ -55,6 +58,7 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
           throw new Error("伺服器回傳空白資料");
         }
         setData(json);
+        setUpdatedAt(Date.now());
         writeClientCache(cacheKey, json);
       } catch (e) {
         if (!mounted.current) return;
@@ -62,7 +66,7 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
           setError(e instanceof Error ? e.message : "載入失敗");
         }
       } finally {
-        if (mounted.current) setRefreshing(false);
+        if (mounted.current && !silent) setRefreshing(false);
       }
     },
     [cacheKey, fetchUrl],
@@ -83,6 +87,7 @@ export function useCachedPageData<T>(cacheKey: string, fetchUrl: string) {
     refreshing,
     error,
     refresh,
+    updatedAt,
     isPending: data == null && refreshing,
   };
 }

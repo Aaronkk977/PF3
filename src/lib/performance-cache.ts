@@ -1,10 +1,17 @@
+import { AUTO_REFRESH_MS } from "@/lib/auto-refresh";
 import { getDataFingerprint } from "@/lib/data-version";
+import { toLocalDateKey } from "@/lib/date-keys";
 import { prisma } from "@/lib/db";
+import { isComputedAtFresh } from "@/lib/quote-freshness";
 import { deletePortfolioValueCache } from "@/lib/portfolio-value-cache";
 import type { CachedPerformanceResult } from "@/lib/performance-cache-client";
 
 /** 分析頁整份績效結果的 server 端快取（PerformanceSnapshot），以
- *  getDataFingerprint() 判斷是否過期。 */
+ *  getDataFingerprint() 判斷是否過期。
+ *
+ *  期間含今天的結果，「今天」那一點是用當下報價算的，另外照報價的規則過期：
+ *  盤中滿 5 分鐘、或收盤後還沒用收盤價算過，就回 null 讓呼叫端重算。重算走
+ *  resolvePortfolioValueSeries 的增量路徑，只重跑最後一天，不是整段重算。 */
 
 export async function getCachedPerformance(
   cacheKey: string,
@@ -14,11 +21,28 @@ export async function getCachedPerformance(
     where: { cacheKey },
   });
   if (!row || row.dataFingerprint !== fingerprint) return null;
+  let result: CachedPerformanceResult;
   try {
-    return JSON.parse(row.payload) as CachedPerformanceResult;
+    result = JSON.parse(row.payload) as CachedPerformanceResult;
   } catch {
     return null;
   }
+  if (result.periodEnd >= toLocalDateKey(new Date())) {
+    // 舊快取沒記用到哪些標的，無從判斷，重算一次補上
+    const symbols = result.quoteSymbols;
+    if (!Array.isArray(symbols)) return null;
+    if (
+      !isComputedAtFresh(
+        symbols as string[],
+        row.computedAt.getTime(),
+        new Date(),
+        AUTO_REFRESH_MS,
+      )
+    ) {
+      return null;
+    }
+  }
+  return result;
 }
 
 export async function setCachedPerformance(

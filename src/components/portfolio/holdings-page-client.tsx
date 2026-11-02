@@ -1,8 +1,10 @@
 "use client";
 
+import { useMemo } from "react";
 import { HoldingsClient } from "@/components/portfolio/holdings-client";
 import { PageRefreshBanner } from "@/components/ui/page-refresh-banner";
 import { PageSkeleton } from "@/components/ui/page-skeleton";
+import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { useCachedPageData } from "@/hooks/use-cached-page-data";
 import type { HoldingPosition } from "@/lib/portfolio-engine";
 import { PAGE_CACHE_KEYS } from "@/lib/client-data-cache";
@@ -18,10 +20,16 @@ type HoldingsPayload = {
 };
 
 export function HoldingsPageClient() {
-  const { data, refreshing, error, isPending, refresh } = useCachedPageData<HoldingsPayload>(
-    PAGE_CACHE_KEYS.holdings,
-    "/api/portfolio/holdings-page",
+  const { data, refreshing, error, isPending, refresh, updatedAt } =
+    useCachedPageData<HoldingsPayload>(
+      PAGE_CACHE_KEYS.holdings,
+      "/api/portfolio/holdings-page",
+    );
+  const symbols = useMemo(
+    () => (data?.holdings ?? []).map((h) => h.symbol),
+    [data?.holdings],
   );
+  useAutoRefresh(() => refresh({ silent: true }), symbols, updatedAt);
 
   if (isPending) return <PageSkeleton title="持倉" />;
   if (error && !data) {
@@ -42,7 +50,7 @@ export function HoldingsPageClient() {
 
   return (
     <>
-      <PageRefreshBanner refreshing={refreshing} />
+      <PageRefreshBanner refreshing={refreshing} updatedAt={updatedAt} />
       <HoldingsClient
         holdings={data.holdings}
         accounts={data.accounts}

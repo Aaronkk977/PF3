@@ -26,6 +26,7 @@ import {
   userCategoryKeys,
 } from "@/lib/allocation-chart-data";
 import { PageSection } from "@/components/layout/page-sections";
+import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSettings } from "@/components/settings/settings-provider";
 import type { HoldingPosition } from "@/lib/holding-types";
@@ -217,6 +218,8 @@ export function HoldingsClient({
   >([]);
   const [trendCashFlows, setTrendCashFlows] = useState<CashFlowEvent[]>([]);
   const [valueHistoryLoading, setValueHistoryLoading] = useState(false);
+  /** 走勢圖資料上次更新的時間（epoch ms），自動更新判斷間隔用 */
+  const [valueUpdatedAt, setValueUpdatedAt] = useState<number | null>(null);
   const [valueCacheHint, setValueCacheHint] = useState<string | null>(null);
   const [trendStartDate, setTrendStartDate] = useState(defaultTrendStartDate);
   const [usdToTwd, setUsdToTwd] = useState(32);
@@ -461,8 +464,9 @@ export function HoldingsClient({
     [trendAccountFilters, trendStartDate],
   );
 
+  /** silent：自動更新用，不顯示「更新中…」也不把圖變淡 */
   const loadValueHistory = useCallback(
-    async (force = false) => {
+    async (force = false, silent = false) => {
       const cacheKey = buildHoldingsValueCacheKey(
         valueHistoryQuery.accountIds,
         valueHistoryQuery.start,
@@ -480,11 +484,12 @@ export function HoldingsClient({
           `已載入 ${new Date(localCached.cachedAt).toLocaleString("zh-TW")} 的快取`,
         );
         if (!force && isHoldingsValueCacheFresh(localCached.cachedAt)) {
+          setValueUpdatedAt(new Date(localCached.cachedAt).getTime());
           return;
         }
       }
 
-      setValueHistoryLoading(true);
+      if (!silent) setValueHistoryLoading(true);
       try {
         const res = await fetch(
           buildValueHistoryUrl(valueHistoryQuery, { force }),
@@ -504,6 +509,7 @@ export function HoldingsClient({
           setTrendChartData(chartData);
           setTrendCashFlows(flows);
           const cachedAt = new Date().toISOString();
+          setValueUpdatedAt(Date.parse(cachedAt));
           saveHoldingsValueCache({
             cacheKey,
             cachedAt,
@@ -516,7 +522,7 @@ export function HoldingsClient({
           );
         }
       } finally {
-        setValueHistoryLoading(false);
+        if (!silent) setValueHistoryLoading(false);
       }
     },
     [valueHistoryQuery, dataVersion],
@@ -526,6 +532,14 @@ export function HoldingsClient({
     if (!prefsReady) return;
     void loadValueHistory(false);
   }, [prefsReady, loadValueHistory]);
+
+  // 放著不動時跟持倉表格一樣每 5 分鐘更新，伺服器只重算「今天」那一點
+  const heldSymbols = useMemo(() => holdings.map((h) => h.symbol), [holdings]);
+  useAutoRefresh(
+    () => loadValueHistory(false, true),
+    heldSymbols,
+    valueUpdatedAt,
+  );
 
   return (
     <div className="space-y-8">
